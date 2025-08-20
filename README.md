@@ -29,8 +29,8 @@ A fast, multi-threaded command-line utility that recursively concatenates files 
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd recurcp
+git clone git@github.com:Oscarnordstrom/rcat.git
+cd rcat
 
 # Use the installation script
 ./install-local.sh
