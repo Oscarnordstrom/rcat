@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,9 @@ struct Stats {
     unreadable_files: usize,
     skipped_files: usize,
     skipped_directories: usize,
+    gitignored_files: usize,
+    gitignored_directories: usize,
+    gitignore_files: Vec<PathBuf>,
     extensions: HashMap<String, usize>,
     total_bytes: usize,
 }
@@ -34,6 +38,9 @@ impl StatsCollector {
                 unreadable_files: 0,
                 skipped_files: 0,
                 skipped_directories: 0,
+                gitignored_files: 0,
+                gitignored_directories: 0,
+                gitignore_files: Vec::new(),
                 extensions: HashMap::new(),
                 total_bytes: 0,
             })),
@@ -91,6 +98,24 @@ impl StatsCollector {
         stats.skipped_directories += 1;
     }
 
+    /// Record a gitignored file
+    pub fn record_gitignored_file(&self) {
+        let mut stats = self.inner.lock().unwrap();
+        stats.gitignored_files += 1;
+    }
+
+    /// Record a gitignored directory
+    pub fn record_gitignored_directory(&self) {
+        let mut stats = self.inner.lock().unwrap();
+        stats.gitignored_directories += 1;
+    }
+
+    /// Set gitignore files being used
+    pub fn set_gitignore_active(&self, gitignore_files: Vec<PathBuf>) {
+        let mut stats = self.inner.lock().unwrap();
+        stats.gitignore_files = gitignore_files;
+    }
+
     /// Get elapsed time
     pub fn elapsed(&self) -> Duration {
         self.start_time.elapsed()
@@ -111,6 +136,18 @@ impl StatsCollector {
             elapsed.as_secs_f64()
         ));
         
+        // Gitignore info
+        if !stats.gitignore_files.is_empty() {
+            let gitignore_names: Vec<String> = stats.gitignore_files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            output.push(format!(
+                "Using .gitignore: {}",
+                gitignore_names.join(", ")
+            ));
+        }
+        
         // File type breakdown
         if stats.files_processed > 0 {
             output.push(format!(
@@ -122,11 +159,24 @@ impl StatsCollector {
         }
         
         // Skipped items
-        if stats.skipped_files > 0 || stats.skipped_directories > 0 {
+        let total_skipped_files = stats.skipped_files + stats.binary_files + stats.gitignored_files;
+        let total_skipped_dirs = stats.skipped_directories + stats.gitignored_directories;
+        
+        if total_skipped_files > 0 || total_skipped_dirs > 0 {
+            let mut skip_reasons = Vec::new();
+            
+            if stats.skipped_files + stats.binary_files > 0 {
+                skip_reasons.push(format!("{} hidden/binary", stats.skipped_files + stats.binary_files));
+            }
+            if stats.gitignored_files + stats.gitignored_directories > 0 {
+                skip_reasons.push(format!("{} gitignored", stats.gitignored_files + stats.gitignored_directories));
+            }
+            
             output.push(format!(
-                "Skipped: {} files, {} directories (hidden or binary)",
-                stats.skipped_files + stats.binary_files,
-                stats.skipped_directories
+                "Skipped: {} files, {} directories ({})",
+                total_skipped_files,
+                total_skipped_dirs,
+                skip_reasons.join(", ")
             ));
         }
         

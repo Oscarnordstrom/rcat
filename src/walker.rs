@@ -8,6 +8,7 @@ use std::thread::{self, JoinHandle};
 use crate::config::Config;
 use crate::file_processor::FileProcessor;
 use crate::format::ByteFormatter;
+use crate::gitignore::GitignoreManager;
 use crate::stats::StatsCollector;
 use crate::thread_pool::{SharedWorkQueue, get_thread_count};
 
@@ -77,6 +78,7 @@ struct DirectoryWalker {
     size_tracker: SizeTracker,
     stats: StatsCollector,
     options: WalkOptions,
+    gitignore: GitignoreManager,
 }
 
 impl DirectoryWalker {
@@ -85,11 +87,21 @@ impl DirectoryWalker {
         let work_queue = SharedWorkQueue::new();
         work_queue.push_initial(path.to_path_buf());
         
+        let gitignore = GitignoreManager::new(path);
+        let stats = StatsCollector::new();
+        
+        // Record if gitignore is active
+        if gitignore.has_active_gitignores() {
+            let gitignore_files = gitignore.active_gitignores();
+            stats.set_gitignore_active(gitignore_files);
+        }
+        
         Self {
             work_queue,
             size_tracker: SizeTracker::new(),
-            stats: StatsCollector::new(),
+            stats,
             options,
+            gitignore,
         }
     }
 
@@ -125,9 +137,10 @@ impl DirectoryWalker {
                 let tracker = self.size_tracker.clone();
                 let stats = self.stats.clone();
                 let options = self.options.clone();
+                let gitignore = self.gitignore.clone();
                 
                 thread::spawn(move || {
-                    Worker::new(queue, sender, tracker, stats, options).run();
+                    Worker::new(queue, sender, tracker, stats, options, gitignore).run();
                 })
             })
             .collect()
@@ -165,6 +178,7 @@ struct Worker {
     size_tracker: SizeTracker,
     stats: StatsCollector,
     options: WalkOptions,
+    gitignore: GitignoreManager,
 }
 
 impl Worker {
@@ -174,6 +188,7 @@ impl Worker {
         size_tracker: SizeTracker,
         stats: StatsCollector,
         options: WalkOptions,
+        gitignore: GitignoreManager,
     ) -> Self {
         Self {
             work_queue,
@@ -181,6 +196,7 @@ impl Worker {
             size_tracker,
             stats,
             options,
+            gitignore,
         }
     }
 
@@ -199,6 +215,16 @@ impl Worker {
 
     /// Process a single path
     fn process_path(&self, path: &Path) {
+        // Check gitignore first (unless --all is specified)
+        if !self.options.include_all && self.gitignore.should_ignore(path) {
+            if path.is_file() {
+                self.stats.record_gitignored_file();
+            } else if path.is_dir() {
+                self.stats.record_gitignored_directory();
+            }
+            return;
+        }
+        
         if path.is_file() {
             // Skip hidden files (starting with '.') unless --all is specified
             if !self.options.include_all {
@@ -275,6 +301,15 @@ impl Worker {
         
         // Record this directory in statistics
         self.stats.record_directory();
+        
+        // Check for .gitignore in this directory
+        self.gitignore.check_directory(path);
+        
+        // Update stats if we found a new gitignore
+        if self.gitignore.has_active_gitignores() {
+            let gitignore_files = self.gitignore.active_gitignores();
+            self.stats.set_gitignore_active(gitignore_files);
+        }
         
         if let Ok(entries) = fs::read_dir(path) {
             let paths: Vec<PathBuf> = entries
