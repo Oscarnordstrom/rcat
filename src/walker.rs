@@ -45,6 +45,20 @@ impl SizeTracker {
     }
 }
 
+/// Options for walking the directory tree
+#[derive(Clone)]
+pub struct WalkOptions {
+    pub include_all: bool,
+}
+
+impl Default for WalkOptions {
+    fn default() -> Self {
+        Self {
+            include_all: false,
+        }
+    }
+}
+
 /// Result of walking a directory tree
 pub struct WalkResult {
     pub content: String,
@@ -52,8 +66,8 @@ pub struct WalkResult {
 }
 
 /// Main entry point for walking directory tree and collecting contents
-pub fn walk_and_collect(path: &Path) -> io::Result<WalkResult> {
-    let walker = DirectoryWalker::new(path);
+pub fn walk_and_collect(path: &Path, options: WalkOptions) -> io::Result<WalkResult> {
+    let walker = DirectoryWalker::new(path, options);
     walker.walk()
 }
 
@@ -62,11 +76,12 @@ struct DirectoryWalker {
     work_queue: SharedWorkQueue,
     size_tracker: SizeTracker,
     stats: StatsCollector,
+    options: WalkOptions,
 }
 
 impl DirectoryWalker {
     /// Create a new directory walker
-    fn new(path: &Path) -> Self {
+    fn new(path: &Path, options: WalkOptions) -> Self {
         let work_queue = SharedWorkQueue::new();
         work_queue.push_initial(path.to_path_buf());
         
@@ -74,6 +89,7 @@ impl DirectoryWalker {
             work_queue,
             size_tracker: SizeTracker::new(),
             stats: StatsCollector::new(),
+            options,
         }
     }
 
@@ -108,9 +124,10 @@ impl DirectoryWalker {
                 let sender = result_sender.clone();
                 let tracker = self.size_tracker.clone();
                 let stats = self.stats.clone();
+                let options = self.options.clone();
                 
                 thread::spawn(move || {
-                    Worker::new(queue, sender, tracker, stats).run();
+                    Worker::new(queue, sender, tracker, stats, options).run();
                 })
             })
             .collect()
@@ -147,6 +164,7 @@ struct Worker {
     result_sender: Sender<String>,
     size_tracker: SizeTracker,
     stats: StatsCollector,
+    options: WalkOptions,
 }
 
 impl Worker {
@@ -155,12 +173,14 @@ impl Worker {
         result_sender: Sender<String>,
         size_tracker: SizeTracker,
         stats: StatsCollector,
+        options: WalkOptions,
     ) -> Self {
         Self {
             work_queue,
             result_sender,
             size_tracker,
             stats,
+            options,
         }
     }
 
@@ -180,8 +200,30 @@ impl Worker {
     /// Process a single path
     fn process_path(&self, path: &Path) {
         if path.is_file() {
+            // Skip hidden files (starting with '.') unless --all is specified
+            if !self.options.include_all {
+                if let Some(file_name) = path.file_name() {
+                    if let Some(name_str) = file_name.to_str() {
+                        if name_str.starts_with('.') {
+                            self.stats.record_skipped_file();
+                            return;
+                        }
+                    }
+                }
+            }
             self.process_file(path);
         } else if path.is_dir() {
+            // Skip hidden directories (starting with '.') unless --all is specified
+            if !self.options.include_all {
+                if let Some(dir_name) = path.file_name() {
+                    if let Some(name_str) = dir_name.to_str() {
+                        if name_str.starts_with('.') {
+                            self.stats.record_skipped_directory();
+                            return;
+                        }
+                    }
+                }
+            }
             self.process_directory(path);
         }
     }
@@ -207,11 +249,14 @@ impl Worker {
             }
             FileContent::Binary => {
                 self.stats.record_binary_file(path);
-                if let Some(formatted) = FileProcessor::format_content(path, content) {
-                    if self.size_tracker.try_add(formatted.len()) {
-                        let _ = self.result_sender.send(formatted);
-                    } else {
-                        self.work_queue.shutdown();
+                // Skip binary files unless --all is specified
+                if self.options.include_all {
+                    if let Some(formatted) = FileProcessor::format_content(path, content) {
+                        if self.size_tracker.try_add(formatted.len()) {
+                            let _ = self.result_sender.send(formatted);
+                        } else {
+                            self.work_queue.shutdown();
+                        }
                     }
                 }
             }
@@ -269,7 +314,7 @@ mod tests {
         let file_path = dir.join("test.txt");
         fs::write(&file_path, "test content").unwrap();
         
-        let result = walk_and_collect(&dir).unwrap();
+        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
         
         assert!(result.content.contains("test content"));
         assert!(result.content.contains("test.txt"));
@@ -285,8 +330,12 @@ mod tests {
         let mut file = fs::File::create(&file_path).unwrap();
         file.write_all(&[0u8; 100]).unwrap();
         
-        let result = walk_and_collect(&dir).unwrap();
+        // Binary files should be skipped by default
+        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        assert!(!result.content.contains("<BINARY_FILE>"));
         
+        // But included with include_all option
+        let result = walk_and_collect(&dir, WalkOptions { include_all: true }).unwrap();
         assert!(result.content.contains("<BINARY_FILE>"));
         assert!(result.content.contains("binary.dat"));
         
@@ -302,7 +351,7 @@ mod tests {
         fs::write(dir.join("subdir1/level1.txt"), "level 1").unwrap();
         fs::write(dir.join("subdir1/subdir2/level2.txt"), "level 2").unwrap();
         
-        let result = walk_and_collect(&dir).unwrap();
+        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
         
         assert!(result.content.contains("root file"));
         assert!(result.content.contains("level 1"));
@@ -315,7 +364,7 @@ mod tests {
     fn test_walk_and_collect_empty_directory() {
         let dir = setup_test_dir("empty");
         
-        let result = walk_and_collect(&dir).unwrap();
+        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
         
         assert_eq!(result.content, "");
         
@@ -332,10 +381,39 @@ mod tests {
             fs::write(dir.join(format!("file_{}.txt", i)), content).unwrap();
         }
         
-        let result = walk_and_collect(&dir).unwrap();
+        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
         
         // Result should be under MAX_SIZE plus some overhead
         assert!(result.content.len() <= Config::MAX_SIZE + 1000);
+        
+        cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_skip_hidden_files_and_directories() {
+        let dir = setup_test_dir("hidden");
+        
+        // Create hidden files and directories
+        fs::write(dir.join(".env"), "secret=value").unwrap();
+        fs::write(dir.join(".hidden_file"), "hidden content").unwrap();
+        fs::write(dir.join("visible.txt"), "visible content").unwrap();
+        
+        fs::create_dir(dir.join(".git")).unwrap();
+        fs::write(dir.join(".git/config"), "git config").unwrap();
+        
+        // Default: skip hidden files and directories
+        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        assert!(!result.content.contains("secret=value"));
+        assert!(!result.content.contains("hidden content"));
+        assert!(!result.content.contains("git config"));
+        assert!(result.content.contains("visible content"));
+        
+        // With include_all: include hidden files and directories
+        let result = walk_and_collect(&dir, WalkOptions { include_all: true }).unwrap();
+        assert!(result.content.contains("secret=value"));
+        assert!(result.content.contains("hidden content"));
+        assert!(result.content.contains("git config"));
+        assert!(result.content.contains("visible content"));
         
         cleanup_test_dir(&dir);
     }

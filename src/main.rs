@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process;
 
-use rcat::{walk_and_collect, walker::WalkResult, format::ByteFormatter, Config};
+use rcat::{walk_and_collect, walker::WalkResult, format::ByteFormatter, Config, walker::WalkOptions};
 
 mod clipboard;
 
@@ -18,6 +18,7 @@ impl AppInfo {
 /// Command-line arguments
 struct Args {
     path: PathBuf,
+    include_all: bool,
 }
 
 impl Args {
@@ -25,21 +26,33 @@ impl Args {
     fn parse() -> Result<Self, ArgsError> {
         let args: Vec<String> = env::args().collect();
         
-        if args.len() != 2 {
+        if args.len() < 2 || args.len() > 3 {
             return Err(ArgsError::InvalidCount);
         }
         
-        match args[1].as_str() {
-            "--help" | "-h" => Err(ArgsError::HelpRequested),
-            path_str => {
-                let path = PathBuf::from(path_str);
-                
-                if !path.exists() {
-                    Err(ArgsError::PathNotFound(path))
-                } else {
-                    Ok(Args { path })
+        let mut include_all = false;
+        let mut path_arg = None;
+        
+        for arg in args.iter().skip(1) {
+            match arg.as_str() {
+                "--help" | "-h" => return Err(ArgsError::HelpRequested),
+                "--all" | "-a" => include_all = true,
+                path_str => {
+                    if path_arg.is_some() {
+                        return Err(ArgsError::InvalidCount);
+                    }
+                    path_arg = Some(path_str);
                 }
             }
+        }
+        
+        let path_str = path_arg.ok_or(ArgsError::InvalidCount)?;
+        let path = PathBuf::from(path_str);
+        
+        if !path.exists() {
+            Err(ArgsError::PathNotFound(path))
+        } else {
+            Ok(Args { path, include_all })
         }
     }
 }
@@ -56,15 +69,20 @@ fn print_help(program_name: &str) {
     println!("{} v{}", AppInfo::NAME, AppInfo::VERSION);
     println!("{}", AppInfo::DESCRIPTION);
     println!();
-    println!("Usage: {} <path>", program_name);
+    println!("Usage: {} [OPTIONS] <path>", program_name);
     println!();
     println!("Options:");
+    println!("  --all, -a     Include hidden directories and binary files");
     println!("  --help, -h    Show this help message");
     println!();
     println!("Description:");
     println!("  Recursively walks through directories, concatenates all file contents,");
-    println!("  and copies the result to the system clipboard. Binary files are marked");
-    println!("  as <BINARY_FILE> and the total size is limited to {}.",
+    println!("  and copies the result to the system clipboard.");
+    println!();
+    println!("  By default, hidden directories (starting with '.') and binary files");
+    println!("  are skipped. Use --all to include them.");
+    println!();
+    println!("  The total size is limited to {}.",
              ByteFormatter::format_as_unit(Config::MAX_SIZE));
 }
 
@@ -72,7 +90,7 @@ fn print_help(program_name: &str) {
 fn print_error(program_name: &str, error: ArgsError) {
     match error {
         ArgsError::InvalidCount => {
-            eprintln!("Usage: {} <path>", program_name);
+            eprintln!("Usage: {} [OPTIONS] <path>", program_name);
             eprintln!("{}", AppInfo::DESCRIPTION);
             eprintln!("Try '{} --help' for more information", program_name);
         }
@@ -109,7 +127,11 @@ fn main() {
 
 /// Run the application
 fn run(args: Args) {
-    match walk_and_collect(&args.path) {
+    let options = WalkOptions {
+        include_all: args.include_all,
+    };
+    
+    match walk_and_collect(&args.path, options) {
         Ok(result) => {
             handle_result(result);
         }

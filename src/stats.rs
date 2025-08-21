@@ -16,6 +16,8 @@ struct Stats {
     binary_files: usize,
     text_files: usize,
     unreadable_files: usize,
+    skipped_files: usize,
+    skipped_directories: usize,
     extensions: HashMap<String, usize>,
     total_bytes: usize,
 }
@@ -30,6 +32,8 @@ impl StatsCollector {
                 binary_files: 0,
                 text_files: 0,
                 unreadable_files: 0,
+                skipped_files: 0,
+                skipped_directories: 0,
                 extensions: HashMap::new(),
                 total_bytes: 0,
             })),
@@ -75,6 +79,18 @@ impl StatsCollector {
         stats.directories_processed += 1;
     }
 
+    /// Record a skipped file
+    pub fn record_skipped_file(&self) {
+        let mut stats = self.inner.lock().unwrap();
+        stats.skipped_files += 1;
+    }
+
+    /// Record a skipped directory
+    pub fn record_skipped_directory(&self) {
+        let mut stats = self.inner.lock().unwrap();
+        stats.skipped_directories += 1;
+    }
+
     /// Get elapsed time
     pub fn elapsed(&self) -> Duration {
         self.start_time.elapsed()
@@ -102,6 +118,15 @@ impl StatsCollector {
                 stats.text_files,
                 stats.binary_files,
                 stats.unreadable_files
+            ));
+        }
+        
+        // Skipped items
+        if stats.skipped_files > 0 || stats.skipped_directories > 0 {
+            output.push(format!(
+                "Skipped: {} files, {} directories (hidden or binary)",
+                stats.skipped_files + stats.binary_files,
+                stats.skipped_directories
             ));
         }
         
