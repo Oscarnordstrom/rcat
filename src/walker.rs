@@ -335,20 +335,24 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // TODO: Fix after removing multithreading
     fn test_size_limit_enforcement() {
         let dir = setup_test_dir("size_limit");
         
-        // Create files that together exceed DEFAULT_MAX_SIZE
-        for i in 0..200 {
-            let content = "x".repeat(30_000); // 30KB per file
-            fs::write(dir.join(format!("file_{}.txt", i)), content).unwrap();
+        // Create files that together exceed DEFAULT_MAX_SIZE (5MB)
+        // Files will be processed in alphabetical order
+        for i in 0..20 {
+            let content = "x".repeat(300_000); // 300KB per file = 6MB total
+            fs::write(dir.join(format!("file_{:02}.txt", i)), content).unwrap();
         }
         
         let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         
-        // Result should be under DEFAULT_MAX_SIZE plus some overhead
-        assert!(result.content.len() <= Config::DEFAULT_MAX_SIZE + 10000);
+        // Result should be under DEFAULT_MAX_SIZE plus overhead for truncation message
+        assert!(result.content.len() <= Config::DEFAULT_MAX_SIZE + 1000);
+        
+        // Should be truncated since we have 6MB of files and 5MB limit
+        assert!(result.truncated, "Expected truncation");
+        assert!(result.content.contains("TRUNCATED"));
         
         cleanup_test_dir(&dir);
     }
