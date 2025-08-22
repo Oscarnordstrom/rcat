@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -52,6 +52,7 @@ struct DirectoryWalker {
     options: WalkOptions,
     gitignore_managers: Vec<GitignoreManager>,
     root_paths: Vec<PathBuf>,
+    visited_paths: HashSet<PathBuf>,
 }
 
 impl DirectoryWalker {
@@ -65,6 +66,7 @@ impl DirectoryWalker {
             options,
             gitignore_managers: Vec::new(),
             root_paths: Vec::new(),
+            visited_paths: HashSet::new(),
         }
     }
     
@@ -118,6 +120,21 @@ impl DirectoryWalker {
     /// Process a path and return any subdirectories to be queued
     fn process_path_bfs(&mut self, path: &Path) -> io::Result<Vec<PathBuf>> {
         if self.truncated {
+            return Ok(Vec::new());
+        }
+        
+        // Get canonical path to handle symlinks and deduplicate
+        let canonical_path = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => {
+                // If we can't canonicalize (e.g., broken symlink), skip this path
+                return Ok(Vec::new());
+            }
+        };
+        
+        // Check if we've already visited this path
+        if !self.visited_paths.insert(canonical_path.clone()) {
+            // Path was already in the set, skip it
             return Ok(Vec::new());
         }
         
@@ -493,6 +510,56 @@ mod tests {
         assert!(pos_level1_a < pos_deep, "Level 1 should come before deeper levels");
         assert!(pos_level1_b < pos_deep, "Level 1 should come before deeper levels");
         assert!(pos_level1_c < pos_deep, "Level 1 should come before deeper levels");
+        
+        cleanup_test_dir(&dir);
+    }
+    
+    #[test]
+    fn test_overlapping_paths_deduplication() {
+        let dir = setup_test_dir("overlapping");
+        
+        // Create nested structure
+        fs::create_dir(dir.join("subdir")).unwrap();
+        fs::write(dir.join("file1.txt"), "content1").unwrap();
+        fs::write(dir.join("subdir/file2.txt"), "content2").unwrap();
+        
+        // Pass both parent and child directory - should not duplicate file2.txt
+        let result = walk_and_collect(&[dir.clone(), dir.join("subdir")], WalkOptions::default()).unwrap();
+        
+        // Each file content should appear exactly once
+        let content1_count = result.content.matches("content1").count();
+        let content2_count = result.content.matches("content2").count();
+        
+        assert_eq!(content1_count, 1, "file1.txt should appear exactly once");
+        assert_eq!(content2_count, 1, "file2.txt should appear exactly once despite overlapping paths");
+        
+        cleanup_test_dir(&dir);
+    }
+    
+    #[cfg(unix)]
+    #[test]
+    fn test_symlink_deduplication() {
+        use std::os::unix::fs as unix_fs;
+        
+        let dir = setup_test_dir("symlinks");
+        
+        // Create a file and directory with content
+        fs::write(dir.join("original.txt"), "original_content").unwrap();
+        fs::create_dir(dir.join("original_dir")).unwrap();
+        fs::write(dir.join("original_dir/nested.txt"), "nested_content").unwrap();
+        
+        // Create symlinks to the file and directory
+        unix_fs::symlink(dir.join("original.txt"), dir.join("link_to_file.txt")).unwrap();
+        unix_fs::symlink(dir.join("original_dir"), dir.join("link_to_dir")).unwrap();
+        
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        
+        // Each content should appear exactly once despite symlinks
+        let original_count = result.content.matches("original_content").count();
+        let nested_count = result.content.matches("nested_content").count();
+        
+        assert_eq!(original_count, 1, "original.txt content should appear exactly once");
+        assert_eq!(nested_count, 1, "nested.txt content should appear exactly once");
         
         cleanup_test_dir(&dir);
     }
