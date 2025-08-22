@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -42,7 +43,7 @@ pub fn walk_and_collect(paths: &[PathBuf], options: WalkOptions) -> io::Result<W
     walker.walk()
 }
 
-/// Handles directory traversal
+/// Handles directory traversal using breadth-first search
 struct DirectoryWalker {
     contents: Vec<String>,
     total_size: usize,
@@ -82,14 +83,29 @@ impl DirectoryWalker {
         self.gitignore_managers.push(gitignore);
     }
     
-    /// Walk the directory tree and collect all contents
+    /// Walk the directory tree using breadth-first search
     fn walk(mut self) -> io::Result<WalkResult> {
-        // Process each root path
+        // Use a queue for BFS - process all files at each level before subdirectories
+        let mut queue = VecDeque::new();
+        
+        // Add all root paths to the queue
         for path in self.root_paths.clone() {
+            queue.push_back(path);
+        }
+        
+        // Process queue in BFS order
+        while let Some(path) = queue.pop_front() {
             if self.truncated {
                 break;
             }
-            self.process_path(&path)?;
+            
+            // Process this path and collect subdirectories
+            let subdirs = self.process_path_bfs(&path)?;
+            
+            // Add subdirectories to the end of the queue (BFS)
+            for subdir in subdirs {
+                queue.push_back(subdir);
+            }
         }
         
         Ok(WalkResult {
@@ -99,10 +115,10 @@ impl DirectoryWalker {
         })
     }
     
-    /// Process a single path (file or directory)
-    fn process_path(&mut self, path: &Path) -> io::Result<()> {
+    /// Process a path and return any subdirectories to be queued
+    fn process_path_bfs(&mut self, path: &Path) -> io::Result<Vec<PathBuf>> {
         if self.truncated {
-            return Ok(());
+            return Ok(Vec::new());
         }
         
         // Check gitignore first (unless --all is specified)
@@ -114,7 +130,7 @@ impl DirectoryWalker {
                     } else if path.is_dir() {
                         self.stats.record_gitignored_directory();
                     }
-                    return Ok(());
+                    return Ok(Vec::new());
                 }
             }
         }
@@ -126,12 +142,13 @@ impl DirectoryWalker {
                     if let Some(name_str) = file_name.to_str() {
                         if name_str.starts_with('.') {
                             self.stats.record_skipped_file();
-                            return Ok(());
+                            return Ok(Vec::new());
                         }
                     }
                 }
             }
             self.process_file(path)?;
+            Ok(Vec::new())
         } else if path.is_dir() {
             // Skip hidden directories (starting with '.') unless --all is specified
             if !self.options.include_all {
@@ -139,15 +156,106 @@ impl DirectoryWalker {
                     if let Some(name_str) = dir_name.to_str() {
                         if name_str.starts_with('.') {
                             self.stats.record_skipped_directory();
-                            return Ok(());
+                            return Ok(Vec::new());
                         }
                     }
                 }
             }
-            self.process_directory(path)?;
+            self.process_directory_bfs(path)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    
+    /// Process a directory in BFS manner - process files first, then return subdirs
+    fn process_directory_bfs(&mut self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        if self.truncated {
+            return Ok(Vec::new());
         }
         
-        Ok(())
+        // Record this directory in statistics
+        self.stats.record_directory();
+        
+        // Check for .gitignore in this directory for all managers
+        for gitignore in &self.gitignore_managers {
+            gitignore.check_directory(path);
+            
+            // Update stats if we found a new gitignore
+            if gitignore.has_active_gitignores() {
+                let gitignore_files = gitignore.active_gitignores();
+                self.stats.set_gitignore_active(gitignore_files);
+            }
+        }
+        
+        // Read all entries
+        let mut all_entries: Vec<PathBuf> = fs::read_dir(path)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        
+        // Sort for deterministic ordering
+        all_entries.sort();
+        
+        // Separate files and directories
+        let mut files = Vec::new();
+        let mut subdirs = Vec::new();
+        
+        for entry in all_entries {
+            // Check if we should skip this entry
+            if !self.should_process(&entry) {
+                continue;
+            }
+            
+            if entry.is_file() {
+                files.push(entry);
+            } else if entry.is_dir() {
+                subdirs.push(entry);
+            }
+        }
+        
+        // Process all files first (breadth-first within this directory)
+        for file in files {
+            if self.truncated {
+                break;
+            }
+            self.process_file(&file)?;
+        }
+        
+        // Return subdirectories to be processed later
+        Ok(subdirs)
+    }
+    
+    /// Check if a path should be processed
+    fn should_process(&self, path: &Path) -> bool {
+        // Check gitignore
+        if !self.options.include_all {
+            for gitignore in &self.gitignore_managers {
+                if gitignore.should_ignore(path) {
+                    if path.is_file() {
+                        self.stats.record_gitignored_file();
+                    } else if path.is_dir() {
+                        self.stats.record_gitignored_directory();
+                    }
+                    return false;
+                }
+            }
+            
+            // Check for hidden files/directories
+            if let Some(name) = path.file_name() {
+                if let Some(name_str) = name.to_str() {
+                    if name_str.starts_with('.') {
+                        if path.is_file() {
+                            self.stats.record_skipped_file();
+                        } else if path.is_dir() {
+                            self.stats.record_skipped_directory();
+                        }
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        true
     }
     
     /// Process a file
@@ -204,46 +312,6 @@ impl DirectoryWalker {
             FileContent::Unreadable => {
                 self.stats.record_unreadable_file();
             }
-        }
-        
-        Ok(())
-    }
-    
-    /// Process a directory
-    fn process_directory(&mut self, path: &Path) -> io::Result<()> {
-        if self.truncated {
-            return Ok(());
-        }
-        
-        // Record this directory in statistics
-        self.stats.record_directory();
-        
-        // Check for .gitignore in this directory for all managers
-        for gitignore in &self.gitignore_managers {
-            gitignore.check_directory(path);
-            
-            // Update stats if we found a new gitignore
-            if gitignore.has_active_gitignores() {
-                let gitignore_files = gitignore.active_gitignores();
-                self.stats.set_gitignore_active(gitignore_files);
-            }
-        }
-        
-        // Read directory entries and sort them for deterministic ordering
-        let mut entries: Vec<PathBuf> = fs::read_dir(path)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
-        
-        // Sort entries for consistent ordering
-        entries.sort();
-        
-        // Process each entry
-        for entry in entries {
-            if self.truncated {
-                break;
-            }
-            self.process_path(&entry)?;
         }
         
         Ok(())
@@ -382,6 +450,49 @@ mod tests {
         assert!(result.content.contains("hidden content"));
         assert!(result.content.contains("git config"));
         assert!(result.content.contains("visible content"));
+        
+        cleanup_test_dir(&dir);
+    }
+    
+    #[test]
+    fn test_breadth_first_order() {
+        let dir = setup_test_dir("bfs");
+        
+        // Create a structure to test BFS ordering
+        // Root level files
+        fs::write(dir.join("a_root.txt"), "root_a").unwrap();
+        fs::write(dir.join("b_root.txt"), "root_b").unwrap();
+        
+        // Create subdirectories with files
+        fs::create_dir(dir.join("dir1")).unwrap();
+        fs::write(dir.join("dir1/a_level1.txt"), "level1_a").unwrap();
+        fs::write(dir.join("dir1/b_level1.txt"), "level1_b").unwrap();
+        
+        fs::create_dir(dir.join("dir2")).unwrap();
+        fs::write(dir.join("dir2/c_level1.txt"), "level1_c").unwrap();
+        
+        // Create nested subdirectory
+        fs::create_dir(dir.join("dir1/subdir")).unwrap();
+        fs::write(dir.join("dir1/subdir/deep.txt"), "deep_file").unwrap();
+        
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        
+        // Find positions of each file in the output
+        let pos_root_a = result.content.find("root_a").unwrap();
+        let pos_root_b = result.content.find("root_b").unwrap();
+        let pos_level1_a = result.content.find("level1_a").unwrap();
+        let pos_level1_b = result.content.find("level1_b").unwrap();
+        let pos_level1_c = result.content.find("level1_c").unwrap();
+        let pos_deep = result.content.find("deep_file").unwrap();
+        
+        // BFS order: all root files should come before any level 1 files
+        assert!(pos_root_a < pos_level1_a, "Root files should come before level 1");
+        assert!(pos_root_b < pos_level1_a, "Root files should come before level 1");
+        
+        // All level 1 files should come before deep nested files
+        assert!(pos_level1_a < pos_deep, "Level 1 should come before deeper levels");
+        assert!(pos_level1_b < pos_deep, "Level 1 should come before deeper levels");
+        assert!(pos_level1_c < pos_deep, "Level 1 should come before deeper levels");
         
         cleanup_test_dir(&dir);
     }
