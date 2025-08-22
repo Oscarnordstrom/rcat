@@ -54,7 +54,7 @@ impl StatsCollector {
         stats.files_processed += 1;
         stats.text_files += 1;
         stats.total_bytes += size;
-        
+
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             *stats.extensions.entry(ext_str).or_insert(0) += 1;
@@ -66,7 +66,7 @@ impl StatsCollector {
         let mut stats = self.inner.lock().unwrap();
         stats.files_processed += 1;
         stats.binary_files += 1;
-        
+
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             *stats.extensions.entry(ext_str).or_insert(0) += 1;
@@ -125,9 +125,9 @@ impl StatsCollector {
     pub fn format_stats(&self) -> String {
         let stats = self.inner.lock().unwrap();
         let elapsed = self.elapsed();
-        
+
         let mut output = Vec::new();
-        
+
         // Summary line
         output.push(format!(
             "Processed {} files and {} directories in {:.2}s",
@@ -135,43 +135,45 @@ impl StatsCollector {
             stats.directories_processed,
             elapsed.as_secs_f64()
         ));
-        
+
         // Gitignore info
         if !stats.gitignore_files.is_empty() {
-            let gitignore_names: Vec<String> = stats.gitignore_files
+            let gitignore_names: Vec<String> = stats
+                .gitignore_files
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect();
-            output.push(format!(
-                "Using .gitignore: {}",
-                gitignore_names.join(", ")
-            ));
+            output.push(format!("Using .gitignore: {}", gitignore_names.join(", ")));
         }
-        
+
         // File type breakdown
         if stats.files_processed > 0 {
             output.push(format!(
                 "Files: {} text, {} binary, {} unreadable",
-                stats.text_files,
-                stats.binary_files,
-                stats.unreadable_files
+                stats.text_files, stats.binary_files, stats.unreadable_files
             ));
         }
-        
+
         // Skipped items
         let total_skipped_files = stats.skipped_files + stats.binary_files + stats.gitignored_files;
         let total_skipped_dirs = stats.skipped_directories + stats.gitignored_directories;
-        
+
         if total_skipped_files > 0 || total_skipped_dirs > 0 {
             let mut skip_reasons = Vec::new();
-            
+
             if stats.skipped_files + stats.binary_files > 0 {
-                skip_reasons.push(format!("{} hidden/binary", stats.skipped_files + stats.binary_files));
+                skip_reasons.push(format!(
+                    "{} hidden/binary",
+                    stats.skipped_files + stats.binary_files
+                ));
             }
             if stats.gitignored_files + stats.gitignored_directories > 0 {
-                skip_reasons.push(format!("{} gitignored", stats.gitignored_files + stats.gitignored_directories));
+                skip_reasons.push(format!(
+                    "{} gitignored",
+                    stats.gitignored_files + stats.gitignored_directories
+                ));
             }
-            
+
             output.push(format!(
                 "Skipped: {} files, {} directories ({})",
                 total_skipped_files,
@@ -179,34 +181,33 @@ impl StatsCollector {
                 skip_reasons.join(", ")
             ));
         }
-        
+
         // Top extensions
         if !stats.extensions.is_empty() {
             let mut extensions: Vec<_> = stats.extensions.iter().collect();
             extensions.sort_by(|a, b| b.1.cmp(a.1));
-            
+
             let top_exts: Vec<String> = extensions
                 .iter()
                 .take(10)
                 .map(|(ext, count)| format!(".{} ({})", ext, count))
                 .collect();
-            
+
             if !top_exts.is_empty() {
                 output.push(format!("Top extensions: {}", top_exts.join(", ")));
             }
         }
-        
+
         // Processing speed
         if elapsed.as_secs_f64() > 0.0 {
             let files_per_sec = stats.files_processed as f64 / elapsed.as_secs_f64();
             let mb_per_sec = (stats.total_bytes as f64 / 1024.0 / 1024.0) / elapsed.as_secs_f64();
             output.push(format!(
                 "Speed: {:.0} files/sec, {:.2} MB/sec",
-                files_per_sec,
-                mb_per_sec
+                files_per_sec, mb_per_sec
             ));
         }
-        
+
         output.join("\n")
     }
 }

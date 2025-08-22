@@ -6,19 +6,19 @@ impl ByteFormatter {
     pub fn format(bytes: usize) -> String {
         const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
         const THRESHOLD: f64 = 1024.0;
-        
+
         if bytes == 0 {
             return "0 B".to_string();
         }
-        
+
         let mut size = bytes as f64;
         let mut unit_index = 0;
-        
+
         while size >= THRESHOLD && unit_index < UNITS.len() - 1 {
             size /= THRESHOLD;
             unit_index += 1;
         }
-        
+
         // Format with appropriate precision
         if size.fract() == 0.0 {
             format!("{:.0} {}", size, UNITS[unit_index])
@@ -30,13 +30,13 @@ impl ByteFormatter {
             format!("{:.0} {}", size, UNITS[unit_index])
         }
     }
-    
+
     /// Format bytes into a specific unit without decimal places
     pub fn format_as_unit(bytes: usize) -> String {
         const GB: usize = 1024 * 1024 * 1024;
         const MB: usize = 1024 * 1024;
         const KB: usize = 1024;
-        
+
         if bytes >= GB && bytes % GB == 0 {
             format!("{}GB", bytes / GB)
         } else if bytes >= MB && bytes % MB == 0 {
@@ -52,7 +52,7 @@ impl ByteFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_format_bytes() {
         assert_eq!(ByteFormatter::format(0), "0 B");
@@ -63,7 +63,7 @@ mod tests {
         assert_eq!(ByteFormatter::format(5 * 1024 * 1024), "5 MB");
         assert_eq!(ByteFormatter::format(1024 * 1024 * 1024), "1 GB");
     }
-    
+
     #[test]
     fn test_format_as_unit() {
         assert_eq!(ByteFormatter::format_as_unit(5 * 1024 * 1024), "5MB");

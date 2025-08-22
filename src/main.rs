@@ -2,7 +2,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process;
 
-use rcat::{walk_and_collect, WalkResult, format::ByteFormatter, Config, WalkOptions, config::parse_size};
+use rcat::{
+    Config, WalkOptions, WalkResult, config::parse_size, format::ByteFormatter, walk_and_collect,
+};
 
 mod clipboard;
 
@@ -26,31 +28,31 @@ impl Args {
     /// Parse command-line arguments
     fn parse() -> Result<Self, ArgsError> {
         let args: Vec<String> = env::args().collect();
-        
+
         if args.len() < 2 {
             return Err(ArgsError::InvalidCount);
         }
-        
+
         let mut include_all = false;
         let mut paths = Vec::new();
         let mut max_size = Config::DEFAULT_MAX_SIZE;
         let mut skip_next = false;
-        
+
         let mut iter = args.iter().skip(1).peekable();
         while let Some(arg) = iter.next() {
             if skip_next {
                 skip_next = false;
                 continue;
             }
-            
+
             match arg.as_str() {
                 "--help" | "-h" => return Err(ArgsError::HelpRequested),
                 "--all" | "-a" => include_all = true,
                 "--max-size" | "-m" => {
-                    let size_str = iter.next()
-                        .ok_or_else(|| ArgsError::InvalidSize("--max-size requires a value".to_string()))?;
-                    max_size = parse_size(size_str)
-                        .map_err(|e| ArgsError::InvalidSize(e))?;
+                    let size_str = iter.next().ok_or_else(|| {
+                        ArgsError::InvalidSize("--max-size requires a value".to_string())
+                    })?;
+                    max_size = parse_size(size_str).map_err(|e| ArgsError::InvalidSize(e))?;
                 }
                 path_str if path_str.starts_with('-') => {
                     return Err(ArgsError::UnknownOption(path_str.to_string()));
@@ -64,12 +66,16 @@ impl Args {
                 }
             }
         }
-        
+
         if paths.is_empty() {
             return Err(ArgsError::InvalidCount);
         }
-        
-        Ok(Args { paths, include_all, max_size })
+
+        Ok(Args {
+            paths,
+            include_all,
+            max_size,
+        })
     }
 }
 
@@ -103,13 +109,24 @@ fn print_help(program_name: &str) {
     println!("  By default, hidden directories (starting with '.') and binary files");
     println!("  are skipped. Use --all to include them.");
     println!();
-    println!("  The default size limit is {}. Use --max-size to change it.",
-             ByteFormatter::format_as_unit(Config::DEFAULT_MAX_SIZE));
+    println!(
+        "  The default size limit is {}. Use --max-size to change it.",
+        ByteFormatter::format_as_unit(Config::DEFAULT_MAX_SIZE)
+    );
     println!();
     println!("Examples:");
-    println!("  {} src/                  # Process src directory", program_name);
-    println!("  {} --all src/ tests/     # Include all files from both directories", program_name);
-    println!("  {} --max-size 10MB src/  # Limit output to 10MB", program_name);
+    println!(
+        "  {} src/                  # Process src directory",
+        program_name
+    );
+    println!(
+        "  {} --all src/ tests/     # Include all files from both directories",
+        program_name
+    );
+    println!(
+        "  {} --max-size 10MB src/  # Limit output to 10MB",
+        program_name
+    );
 }
 
 /// Print error message
@@ -137,30 +154,30 @@ fn print_error(program_name: &str, error: ArgsError) {
 }
 
 fn main() {
-    let program_name = env::args().next().unwrap_or_else(|| AppInfo::NAME.to_string());
-    
+    let program_name = env::args()
+        .next()
+        .unwrap_or_else(|| AppInfo::NAME.to_string());
+
     // Validate clipboard utility is available before processing
     if let Err(error) = clipboard::validate_clipboard() {
         eprintln!("Error: {}", error);
         process::exit(1);
     }
-    
+
     let args = match Args::parse() {
         Ok(args) => args,
-        Err(error) => {
-            match error {
-                ArgsError::HelpRequested => {
-                    print_help(&program_name);
-                    process::exit(0);
-                }
-                _ => {
-                    print_error(&program_name, error);
-                    process::exit(1);
-                }
+        Err(error) => match error {
+            ArgsError::HelpRequested => {
+                print_help(&program_name);
+                process::exit(0);
             }
-        }
+            _ => {
+                print_error(&program_name, error);
+                process::exit(1);
+            }
+        },
     };
-    
+
     run(args);
 }
 
@@ -170,7 +187,7 @@ fn run(args: Args) {
         include_all: args.include_all,
         max_size: args.max_size,
     };
-    
+
     match walk_and_collect(&args.paths, options) {
         Ok(result) => {
             handle_result(result, args.max_size);
@@ -185,19 +202,28 @@ fn run(args: Args) {
 /// Handle the collected result
 fn handle_result(result: WalkResult, max_size: usize) {
     let size = result.content.len();
-    
+
     if size == 0 {
         println!("No files found to copy");
         return;
     }
-    
+
     match clipboard::copy_to_clipboard(&result.content) {
         Ok(_) => {
             if result.truncated {
-                println!("Content truncated at {} limit", ByteFormatter::format_as_unit(max_size));
-                println!("Successfully copied {} to clipboard", ByteFormatter::format(size));
+                println!(
+                    "Content truncated at {} limit",
+                    ByteFormatter::format_as_unit(max_size)
+                );
+                println!(
+                    "Successfully copied {} to clipboard",
+                    ByteFormatter::format(size)
+                );
             } else {
-                println!("Successfully copied {} to clipboard", ByteFormatter::format(size));
+                println!(
+                    "Successfully copied {} to clipboard",
+                    ByteFormatter::format(size)
+                );
             }
             eprintln!("\n{}", result.stats.format_stats());
         }

@@ -7,4 +7,4 @@ pub mod stats;
 pub mod walker;
 
 pub use config::Config;
-pub use walker::{walk_and_collect, WalkOptions, WalkResult};
+pub use walker::{WalkOptions, WalkResult, walk_and_collect};

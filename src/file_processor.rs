@@ -39,11 +39,9 @@ impl FileProcessor {
         };
 
         let mut buffer = vec![0u8; Config::BINARY_CHECK_BUFFER_SIZE];
-        
+
         match file.read(&mut buffer) {
-            Ok(bytes_read) => {
-                buffer[..bytes_read].contains(&0)
-            }
+            Ok(bytes_read) => buffer[..bytes_read].contains(&0),
             Err(_) => false,
         }
     }
@@ -51,12 +49,8 @@ impl FileProcessor {
     /// Format file content for output
     pub fn format_content(path: &Path, content: FileContent) -> Option<String> {
         match content {
-            FileContent::Text(text) => {
-                Some(format!("--- {} ---\n{}", path.display(), text))
-            }
-            FileContent::Binary => {
-                Some(format!("--- {} ---\n<BINARY_FILE>", path.display()))
-            }
+            FileContent::Text(text) => Some(format!("--- {} ---\n{}", path.display(), text)),
+            FileContent::Binary => Some(format!("--- {} ---\n<BINARY_FILE>", path.display())),
             FileContent::Unreadable => None,
         }
     }
