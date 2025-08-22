@@ -139,6 +139,12 @@ fn print_error(program_name: &str, error: ArgsError) {
 fn main() {
     let program_name = env::args().next().unwrap_or_else(|| AppInfo::NAME.to_string());
     
+    // Validate clipboard utility is available before processing
+    if let Err(error) = clipboard::validate_clipboard() {
+        eprintln!("Error: {}", error);
+        process::exit(1);
+    }
+    
     let args = match Args::parse() {
         Ok(args) => args,
         Err(error) => {
