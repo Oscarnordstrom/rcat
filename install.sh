@@ -2,11 +2,31 @@
 
 set -e
 
+# Check for Rust installation
+if ! command -v cargo &> /dev/null; then
+    echo "Error: Rust/Cargo not found."
+    echo "Install Rust from https://rustup.rs/"
+    exit 1
+fi
+
+# Check if we're in the project directory
+if [ ! -f "Cargo.toml" ]; then
+    echo "Error: Cargo.toml not found."
+    echo "Run this script from the rcat project directory."
+    exit 1
+fi
+
 # Determine the local bin directory
 LOCAL_BIN="$HOME/.local/bin"
 
 echo "Building rcat in release mode..."
 cargo build --release
+
+# Check if build succeeded
+if [ ! -f "target/release/rcat" ]; then
+    echo "Error: Build failed - binary not found at target/release/rcat"
+    exit 1
+fi
 
 # Create local bin directory if it doesn't exist
 if [ ! -d "$LOCAL_BIN" ]; then
@@ -16,9 +36,6 @@ fi
 
 echo "Installing to $LOCAL_BIN..."
 cp target/release/rcat "$LOCAL_BIN/"
-
-echo "Setting executable permissions..."
-chmod +x "$LOCAL_BIN/rcat"
 
 # Check if LOCAL_BIN is in PATH
 if [[ ":$PATH:" != *":$LOCAL_BIN:"* ]]; then
