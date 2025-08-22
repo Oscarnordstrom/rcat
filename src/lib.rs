@@ -8,4 +8,4 @@ pub mod thread_pool;
 pub mod walker;
 
 pub use config::Config;
-pub use walker::{walk_and_collect, WalkOptions};
+pub use walker::{walk_and_collect, WalkOptions, WalkResult};

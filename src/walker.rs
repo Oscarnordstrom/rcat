@@ -67,8 +67,8 @@ pub struct WalkResult {
 }
 
 /// Main entry point for walking directory tree and collecting contents
-pub fn walk_and_collect(path: &Path, options: WalkOptions) -> io::Result<WalkResult> {
-    let walker = DirectoryWalker::new(path, options);
+pub fn walk_and_collect(paths: &[PathBuf], options: WalkOptions) -> io::Result<WalkResult> {
+    let walker = DirectoryWalker::new(paths, options);
     walker.walk()
 }
 
@@ -78,22 +78,29 @@ struct DirectoryWalker {
     size_tracker: SizeTracker,
     stats: StatsCollector,
     options: WalkOptions,
-    gitignore: GitignoreManager,
+    gitignore_managers: Vec<GitignoreManager>,
 }
 
 impl DirectoryWalker {
     /// Create a new directory walker
-    fn new(path: &Path, options: WalkOptions) -> Self {
+    fn new(paths: &[PathBuf], options: WalkOptions) -> Self {
         let work_queue = SharedWorkQueue::new();
-        work_queue.push_initial(path.to_path_buf());
-        
-        let gitignore = GitignoreManager::new(path);
+        let mut gitignore_managers = Vec::new();
         let stats = StatsCollector::new();
         
-        // Record if gitignore is active
-        if gitignore.has_active_gitignores() {
-            let gitignore_files = gitignore.active_gitignores();
-            stats.set_gitignore_active(gitignore_files);
+        // Initialize work queue and gitignore managers for each path
+        for path in paths {
+            work_queue.push_initial(path.clone());
+            
+            let gitignore = GitignoreManager::new(path);
+            
+            // Record if gitignore is active
+            if gitignore.has_active_gitignores() {
+                let gitignore_files = gitignore.active_gitignores();
+                stats.set_gitignore_active(gitignore_files);
+            }
+            
+            gitignore_managers.push(gitignore);
         }
         
         Self {
@@ -101,7 +108,7 @@ impl DirectoryWalker {
             size_tracker: SizeTracker::new(),
             stats,
             options,
-            gitignore,
+            gitignore_managers,
         }
     }
 
@@ -137,10 +144,10 @@ impl DirectoryWalker {
                 let tracker = self.size_tracker.clone();
                 let stats = self.stats.clone();
                 let options = self.options.clone();
-                let gitignore = self.gitignore.clone();
+                let gitignore_managers = self.gitignore_managers.clone();
                 
                 thread::spawn(move || {
-                    Worker::new(queue, sender, tracker, stats, options, gitignore).run();
+                    Worker::new(queue, sender, tracker, stats, options, gitignore_managers).run();
                 })
             })
             .collect()
@@ -178,7 +185,7 @@ struct Worker {
     size_tracker: SizeTracker,
     stats: StatsCollector,
     options: WalkOptions,
-    gitignore: GitignoreManager,
+    gitignore_managers: Vec<GitignoreManager>,
 }
 
 impl Worker {
@@ -188,7 +195,7 @@ impl Worker {
         size_tracker: SizeTracker,
         stats: StatsCollector,
         options: WalkOptions,
-        gitignore: GitignoreManager,
+        gitignore_managers: Vec<GitignoreManager>,
     ) -> Self {
         Self {
             work_queue,
@@ -196,7 +203,7 @@ impl Worker {
             size_tracker,
             stats,
             options,
-            gitignore,
+            gitignore_managers,
         }
     }
 
@@ -216,13 +223,17 @@ impl Worker {
     /// Process a single path
     fn process_path(&self, path: &Path) {
         // Check gitignore first (unless --all is specified)
-        if !self.options.include_all && self.gitignore.should_ignore(path) {
-            if path.is_file() {
-                self.stats.record_gitignored_file();
-            } else if path.is_dir() {
-                self.stats.record_gitignored_directory();
+        if !self.options.include_all {
+            for gitignore in &self.gitignore_managers {
+                if gitignore.should_ignore(path) {
+                    if path.is_file() {
+                        self.stats.record_gitignored_file();
+                    } else if path.is_dir() {
+                        self.stats.record_gitignored_directory();
+                    }
+                    return;
+                }
             }
-            return;
         }
         
         if path.is_file() {
@@ -302,13 +313,15 @@ impl Worker {
         // Record this directory in statistics
         self.stats.record_directory();
         
-        // Check for .gitignore in this directory
-        self.gitignore.check_directory(path);
-        
-        // Update stats if we found a new gitignore
-        if self.gitignore.has_active_gitignores() {
-            let gitignore_files = self.gitignore.active_gitignores();
-            self.stats.set_gitignore_active(gitignore_files);
+        // Check for .gitignore in this directory for all managers
+        for gitignore in &self.gitignore_managers {
+            gitignore.check_directory(path);
+            
+            // Update stats if we found a new gitignore
+            if gitignore.has_active_gitignores() {
+                let gitignore_files = gitignore.active_gitignores();
+                self.stats.set_gitignore_active(gitignore_files);
+            }
         }
         
         if let Ok(entries) = fs::read_dir(path) {
@@ -349,7 +362,7 @@ mod tests {
         let file_path = dir.join("test.txt");
         fs::write(&file_path, "test content").unwrap();
         
-        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         
         assert!(result.content.contains("test content"));
         assert!(result.content.contains("test.txt"));
@@ -366,11 +379,11 @@ mod tests {
         file.write_all(&[0u8; 100]).unwrap();
         
         // Binary files should be skipped by default
-        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         assert!(!result.content.contains("<BINARY_FILE>"));
         
         // But included with include_all option
-        let result = walk_and_collect(&dir, WalkOptions { include_all: true }).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions { include_all: true }).unwrap();
         assert!(result.content.contains("<BINARY_FILE>"));
         assert!(result.content.contains("binary.dat"));
         
@@ -386,7 +399,7 @@ mod tests {
         fs::write(dir.join("subdir1/level1.txt"), "level 1").unwrap();
         fs::write(dir.join("subdir1/subdir2/level2.txt"), "level 2").unwrap();
         
-        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         
         assert!(result.content.contains("root file"));
         assert!(result.content.contains("level 1"));
@@ -399,7 +412,7 @@ mod tests {
     fn test_walk_and_collect_empty_directory() {
         let dir = setup_test_dir("empty");
         
-        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         
         assert_eq!(result.content, "");
         
@@ -416,7 +429,7 @@ mod tests {
             fs::write(dir.join(format!("file_{}.txt", i)), content).unwrap();
         }
         
-        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         
         // Result should be under MAX_SIZE plus some overhead
         assert!(result.content.len() <= Config::MAX_SIZE + 1000);
@@ -437,14 +450,14 @@ mod tests {
         fs::write(dir.join(".git/config"), "git config").unwrap();
         
         // Default: skip hidden files and directories
-        let result = walk_and_collect(&dir, WalkOptions::default()).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
         assert!(!result.content.contains("secret=value"));
         assert!(!result.content.contains("hidden content"));
         assert!(!result.content.contains("git config"));
         assert!(result.content.contains("visible content"));
         
         // With include_all: include hidden files and directories
-        let result = walk_and_collect(&dir, WalkOptions { include_all: true }).unwrap();
+        let result = walk_and_collect(&[dir.clone()], WalkOptions { include_all: true }).unwrap();
         assert!(result.content.contains("secret=value"));
         assert!(result.content.contains("hidden content"));
         assert!(result.content.contains("git config"));
