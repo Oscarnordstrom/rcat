@@ -34,18 +34,23 @@ pub fn validate_clipboard() -> Result<(), String> {
 
 /// Check if a command is available in PATH
 fn is_command_available(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or_else(|_| {
-            // Fallback for Windows or if 'which' is not available
-            Command::new(cmd)
-                .arg("--version")
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false)
-        })
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("where")
+            .arg(cmd)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        Command::new("which")
+            .arg(cmd)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
 }
 
 pub fn copy_to_clipboard(content: &str) -> io::Result<()> {
