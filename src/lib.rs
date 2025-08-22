@@ -4,7 +4,6 @@ pub mod file_processor;
 pub mod format;
 pub mod gitignore;
 pub mod stats;
-pub mod thread_pool;
 pub mod walker;
 
 pub use config::Config;

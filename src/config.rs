@@ -5,8 +5,6 @@ impl Config {
     /// Default maximum size of content to copy to clipboard (5MB)
     pub const DEFAULT_MAX_SIZE: usize = 5 * 1024 * 1024;
 
-    /// Maximum number of worker threads
-    pub const MAX_THREADS: usize = 4;
 
     /// Buffer size for binary file detection
     pub const BINARY_CHECK_BUFFER_SIZE: usize = 8192;

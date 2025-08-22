@@ -1,53 +1,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender};
-use std::thread::{self, JoinHandle};
 
 use crate::config::Config;
 use crate::file_processor::FileProcessor;
 use crate::format::ByteFormatter;
 use crate::gitignore::GitignoreManager;
 use crate::stats::StatsCollector;
-use crate::thread_pool::{SharedWorkQueue, get_thread_count};
-
-/// Size tracking for enforcing limits
-struct SizeTracker {
-    current: Arc<Mutex<usize>>,
-    max_size: usize,
-}
-
-impl SizeTracker {
-    fn new(max_size: usize) -> Self {
-        Self {
-            current: Arc::new(Mutex::new(0)),
-            max_size,
-        }
-    }
-
-    fn try_add(&self, size: usize) -> bool {
-        let mut current = self.current.lock().unwrap();
-        if *current + size <= self.max_size {
-            *current += size;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn is_at_limit(&self) -> bool {
-        let current = self.current.lock().unwrap();
-        *current >= self.max_size
-    }
-
-    fn clone(&self) -> Self {
-        Self {
-            current: Arc::clone(&self.current),
-            max_size: self.max_size,
-        }
-    }
-}
 
 /// Options for walking the directory tree
 #[derive(Clone)]
@@ -74,165 +33,78 @@ pub struct WalkResult {
 
 /// Main entry point for walking directory tree and collecting contents
 pub fn walk_and_collect(paths: &[PathBuf], options: WalkOptions) -> io::Result<WalkResult> {
-    let walker = DirectoryWalker::new(paths, options);
+    let mut walker = DirectoryWalker::new(options);
+    
+    for path in paths {
+        walker.add_root(path);
+    }
+    
     walker.walk()
 }
 
-/// Handles parallel directory traversal
+/// Handles directory traversal
 struct DirectoryWalker {
-    work_queue: SharedWorkQueue,
-    size_tracker: SizeTracker,
+    contents: Vec<String>,
+    total_size: usize,
+    truncated: bool,
     stats: StatsCollector,
     options: WalkOptions,
     gitignore_managers: Vec<GitignoreManager>,
+    root_paths: Vec<PathBuf>,
 }
 
 impl DirectoryWalker {
     /// Create a new directory walker
-    fn new(paths: &[PathBuf], options: WalkOptions) -> Self {
-        let work_queue = SharedWorkQueue::new();
-        let mut gitignore_managers = Vec::new();
-        let stats = StatsCollector::new();
-        
-        // Initialize work queue and gitignore managers for each path
-        for path in paths {
-            work_queue.push_initial(path.clone());
-            
-            let gitignore = GitignoreManager::new(path);
-            
-            // Record if gitignore is active
-            if gitignore.has_active_gitignores() {
-                let gitignore_files = gitignore.active_gitignores();
-                stats.set_gitignore_active(gitignore_files);
-            }
-            
-            gitignore_managers.push(gitignore);
-        }
-        
+    fn new(options: WalkOptions) -> Self {
         Self {
-            work_queue,
-            size_tracker: SizeTracker::new(options.max_size),
-            stats,
+            contents: Vec::new(),
+            total_size: 0,
+            truncated: false,
+            stats: StatsCollector::new(),
             options,
-            gitignore_managers,
+            gitignore_managers: Vec::new(),
+            root_paths: Vec::new(),
         }
     }
-
+    
+    /// Add a root path to process
+    fn add_root(&mut self, path: &Path) {
+        self.root_paths.push(path.to_path_buf());
+        
+        let gitignore = GitignoreManager::new(path);
+        
+        // Record if gitignore is active
+        if gitignore.has_active_gitignores() {
+            let gitignore_files = gitignore.active_gitignores();
+            self.stats.set_gitignore_active(gitignore_files);
+        }
+        
+        self.gitignore_managers.push(gitignore);
+    }
+    
     /// Walk the directory tree and collect all contents
-    fn walk(self) -> io::Result<WalkResult> {
-        let (sender, receiver) = mpsc::channel();
-        
-        // Spawn worker threads
-        let workers = self.spawn_workers(sender);
-        
-        // Collect results (this will return whether truncation occurred)
-        let (contents, truncated) = self.collect_results(receiver);
-        
-        // Wait for workers to finish
-        for worker in workers {
-            worker.join().ok();
+    fn walk(mut self) -> io::Result<WalkResult> {
+        // Process each root path
+        for path in self.root_paths.clone() {
+            if self.truncated {
+                break;
+            }
+            self.process_path(&path)?;
         }
         
         Ok(WalkResult {
-            content: contents.join("\n"),
+            content: self.contents.join("\n"),
             stats: self.stats,
-            truncated,
+            truncated: self.truncated,
         })
     }
-
-    /// Spawn worker threads
-    fn spawn_workers(&self, result_sender: Sender<String>) -> Vec<JoinHandle<()>> {
-        let num_threads = get_thread_count();
-        
-        (0..num_threads)
-            .map(|_| {
-                let queue = self.work_queue.clone();
-                let sender = result_sender.clone();
-                let tracker = self.size_tracker.clone();
-                let stats = self.stats.clone();
-                let options = self.options.clone();
-                let gitignore_managers = self.gitignore_managers.clone();
-                
-                thread::spawn(move || {
-                    Worker::new(queue, sender, tracker, stats, options, gitignore_managers).run();
-                })
-            })
-            .collect()
-    }
-
-    /// Collect results from workers
-    fn collect_results(&self, receiver: mpsc::Receiver<String>) -> (Vec<String>, bool) {
-        let mut contents = Vec::new();
-        let mut total_size = 0;
-        let mut truncated = false;
-        
-        while let Ok(content) = receiver.recv() {
-            let content_size = content.len();
-            
-            if total_size + content_size > self.options.max_size {
-                contents.push(format!(
-                    "\n--- TRUNCATED: Size limit of {} reached ---\n--- {} collected, {} would exceed limit ---",
-                    ByteFormatter::format_as_unit(self.options.max_size),
-                    ByteFormatter::format(total_size),
-                    ByteFormatter::format(total_size + content_size)
-                ));
-                self.work_queue.shutdown();
-                truncated = true;
-                break;
-            }
-            
-            total_size += content_size;
-            contents.push(content);
+    
+    /// Process a single path (file or directory)
+    fn process_path(&mut self, path: &Path) -> io::Result<()> {
+        if self.truncated {
+            return Ok(());
         }
         
-        (contents, truncated)
-    }
-}
-
-/// Worker thread for processing paths
-struct Worker {
-    work_queue: SharedWorkQueue,
-    result_sender: Sender<String>,
-    size_tracker: SizeTracker,
-    stats: StatsCollector,
-    options: WalkOptions,
-    gitignore_managers: Vec<GitignoreManager>,
-}
-
-impl Worker {
-    fn new(
-        work_queue: SharedWorkQueue,
-        result_sender: Sender<String>,
-        size_tracker: SizeTracker,
-        stats: StatsCollector,
-        options: WalkOptions,
-        gitignore_managers: Vec<GitignoreManager>,
-    ) -> Self {
-        Self {
-            work_queue,
-            result_sender,
-            size_tracker,
-            stats,
-            options,
-            gitignore_managers,
-        }
-    }
-
-    /// Main worker loop
-    fn run(self) {
-        while let Some(path) = self.work_queue.pop() {
-            if self.size_tracker.is_at_limit() {
-                self.work_queue.complete_task();
-                return;
-            }
-            
-            self.process_path(&path);
-            self.work_queue.complete_task();
-        }
-    }
-
-    /// Process a single path
-    fn process_path(&self, path: &Path) {
         // Check gitignore first (unless --all is specified)
         if !self.options.include_all {
             for gitignore in &self.gitignore_managers {
@@ -242,7 +114,7 @@ impl Worker {
                     } else if path.is_dir() {
                         self.stats.record_gitignored_directory();
                     }
-                    return;
+                    return Ok(());
                 }
             }
         }
@@ -254,12 +126,12 @@ impl Worker {
                     if let Some(name_str) = file_name.to_str() {
                         if name_str.starts_with('.') {
                             self.stats.record_skipped_file();
-                            return;
+                            return Ok(());
                         }
                     }
                 }
             }
-            self.process_file(path);
+            self.process_file(path)?;
         } else if path.is_dir() {
             // Skip hidden directories (starting with '.') unless --all is specified
             if !self.options.include_all {
@@ -267,17 +139,19 @@ impl Worker {
                     if let Some(name_str) = dir_name.to_str() {
                         if name_str.starts_with('.') {
                             self.stats.record_skipped_directory();
-                            return;
+                            return Ok(());
                         }
                     }
                 }
             }
-            self.process_directory(path);
+            self.process_directory(path)?;
         }
+        
+        Ok(())
     }
-
+    
     /// Process a file
-    fn process_file(&self, path: &Path) {
+    fn process_file(&mut self, path: &Path) -> io::Result<()> {
         use crate::file_processor::FileContent;
         
         let content = FileProcessor::process(path);
@@ -286,13 +160,22 @@ impl Worker {
             FileContent::Text(_) => {
                 if let Some(formatted) = FileProcessor::format_content(path, content) {
                     let size = formatted.len();
-                    if self.size_tracker.try_add(size) {
-                        self.stats.record_text_file(path, size);
-                        let _ = self.result_sender.send(formatted);
-                    } else {
-                        // Size limit reached, trigger shutdown
-                        self.work_queue.shutdown();
+                    
+                    // Check if adding this would exceed the limit
+                    if self.total_size + size > self.options.max_size {
+                        self.contents.push(format!(
+                            "\n--- TRUNCATED: Size limit of {} reached ---\n--- {} collected, {} would exceed limit ---",
+                            ByteFormatter::format_as_unit(self.options.max_size),
+                            ByteFormatter::format(self.total_size),
+                            ByteFormatter::format(self.total_size + size)
+                        ));
+                        self.truncated = true;
+                        return Ok(());
                     }
+                    
+                    self.total_size += size;
+                    self.stats.record_text_file(path, size);
+                    self.contents.push(formatted);
                 }
             }
             FileContent::Binary => {
@@ -300,11 +183,21 @@ impl Worker {
                 // Skip binary files unless --all is specified
                 if self.options.include_all {
                     if let Some(formatted) = FileProcessor::format_content(path, content) {
-                        if self.size_tracker.try_add(formatted.len()) {
-                            let _ = self.result_sender.send(formatted);
-                        } else {
-                            self.work_queue.shutdown();
+                        let size = formatted.len();
+                        
+                        if self.total_size + size > self.options.max_size {
+                            self.contents.push(format!(
+                                "\n--- TRUNCATED: Size limit of {} reached ---\n--- {} collected, {} would exceed limit ---",
+                                ByteFormatter::format_as_unit(self.options.max_size),
+                                ByteFormatter::format(self.total_size),
+                                ByteFormatter::format(self.total_size + size)
+                            ));
+                            self.truncated = true;
+                            return Ok(());
                         }
+                        
+                        self.total_size += size;
+                        self.contents.push(formatted);
                     }
                 }
             }
@@ -312,13 +205,14 @@ impl Worker {
                 self.stats.record_unreadable_file();
             }
         }
+        
+        Ok(())
     }
-
+    
     /// Process a directory
-    fn process_directory(&self, path: &Path) {
-        // Check if we should stop before processing directory entries
-        if self.size_tracker.is_at_limit() || self.work_queue.is_shutdown() {
-            return;
+    fn process_directory(&mut self, path: &Path) -> io::Result<()> {
+        if self.truncated {
+            return Ok(());
         }
         
         // Record this directory in statistics
@@ -335,14 +229,24 @@ impl Worker {
             }
         }
         
-        if let Ok(entries) = fs::read_dir(path) {
-            let paths: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .collect();
-            
-            self.work_queue.extend(paths);
+        // Read directory entries and sort them for deterministic ordering
+        let mut entries: Vec<PathBuf> = fs::read_dir(path)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        
+        // Sort entries for consistent ordering
+        entries.sort();
+        
+        // Process each entry
+        for entry in entries {
+            if self.truncated {
+                break;
+            }
+            self.process_path(&entry)?;
         }
+        
+        Ok(())
     }
 }
 
