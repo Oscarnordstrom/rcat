@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process;
 
-use rcat::{walk_and_collect, WalkResult, format::ByteFormatter, Config, WalkOptions};
+use rcat::{walk_and_collect, WalkResult, format::ByteFormatter, Config, WalkOptions, config::parse_size};
 
 mod clipboard;
 
@@ -19,6 +19,7 @@ impl AppInfo {
 struct Args {
     paths: Vec<PathBuf>,
     include_all: bool,
+    max_size: usize,
 }
 
 impl Args {
@@ -32,11 +33,28 @@ impl Args {
         
         let mut include_all = false;
         let mut paths = Vec::new();
+        let mut max_size = Config::DEFAULT_MAX_SIZE;
+        let mut skip_next = false;
         
-        for arg in args.iter().skip(1) {
+        let mut iter = args.iter().skip(1).peekable();
+        while let Some(arg) = iter.next() {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            
             match arg.as_str() {
                 "--help" | "-h" => return Err(ArgsError::HelpRequested),
                 "--all" | "-a" => include_all = true,
+                "--max-size" | "-m" => {
+                    let size_str = iter.next()
+                        .ok_or_else(|| ArgsError::InvalidSize("--max-size requires a value".to_string()))?;
+                    max_size = parse_size(size_str)
+                        .map_err(|e| ArgsError::InvalidSize(e))?;
+                }
+                path_str if path_str.starts_with('-') => {
+                    return Err(ArgsError::UnknownOption(path_str.to_string()));
+                }
                 path_str => {
                     let path = PathBuf::from(path_str);
                     if !path.exists() {
@@ -51,7 +69,7 @@ impl Args {
             return Err(ArgsError::InvalidCount);
         }
         
-        Ok(Args { paths, include_all })
+        Ok(Args { paths, include_all, max_size })
     }
 }
 
@@ -60,6 +78,8 @@ enum ArgsError {
     InvalidCount,
     HelpRequested,
     PathNotFound(PathBuf),
+    InvalidSize(String),
+    UnknownOption(String),
 }
 
 /// Print help message
@@ -70,8 +90,9 @@ fn print_help(program_name: &str) {
     println!("Usage: {} [OPTIONS] <path>...", program_name);
     println!();
     println!("Options:");
-    println!("  --all, -a     Include hidden directories and binary files");
-    println!("  --help, -h    Show this help message");
+    println!("  --all, -a              Include hidden directories and binary files");
+    println!("  --max-size, -m <size>  Set maximum output size (e.g., 10MB, 1GB, 500KB)");
+    println!("  --help, -h             Show this help message");
     println!();
     println!("Description:");
     println!("  Recursively walks through directories, concatenates all file contents,");
@@ -82,8 +103,13 @@ fn print_help(program_name: &str) {
     println!("  By default, hidden directories (starting with '.') and binary files");
     println!("  are skipped. Use --all to include them.");
     println!();
-    println!("  The total size is limited to {}.",
-             ByteFormatter::format_as_unit(Config::MAX_SIZE));
+    println!("  The default size limit is {}. Use --max-size to change it.",
+             ByteFormatter::format_as_unit(Config::DEFAULT_MAX_SIZE));
+    println!();
+    println!("Examples:");
+    println!("  {} src/                  # Process src directory", program_name);
+    println!("  {} --all src/ tests/     # Include all files from both directories", program_name);
+    println!("  {} --max-size 10MB src/  # Limit output to 10MB", program_name);
 }
 
 /// Print error message
@@ -96,6 +122,13 @@ fn print_error(program_name: &str, error: ArgsError) {
         }
         ArgsError::PathNotFound(path) => {
             eprintln!("Error: Path '{}' does not exist", path.display());
+        }
+        ArgsError::InvalidSize(msg) => {
+            eprintln!("Error: Invalid size - {}", msg);
+        }
+        ArgsError::UnknownOption(opt) => {
+            eprintln!("Error: Unknown option '{}'", opt);
+            eprintln!("Try '{} --help' for more information", program_name);
         }
         ArgsError::HelpRequested => {
             print_help(program_name);
@@ -129,11 +162,12 @@ fn main() {
 fn run(args: Args) {
     let options = WalkOptions {
         include_all: args.include_all,
+        max_size: args.max_size,
     };
     
     match walk_and_collect(&args.paths, options) {
         Ok(result) => {
-            handle_result(result);
+            handle_result(result, args.max_size);
         }
         Err(error) => {
             eprintln!("Error: Failed to process directories - {}", error);
@@ -143,7 +177,7 @@ fn run(args: Args) {
 }
 
 /// Handle the collected result
-fn handle_result(result: WalkResult) {
+fn handle_result(result: WalkResult, max_size: usize) {
     let size = result.content.len();
     
     if size == 0 {
@@ -153,7 +187,12 @@ fn handle_result(result: WalkResult) {
     
     match clipboard::copy_to_clipboard(&result.content) {
         Ok(_) => {
-            println!("Successfully copied {} to clipboard", ByteFormatter::format(size));
+            if result.truncated {
+                println!("Content truncated at {} limit", ByteFormatter::format_as_unit(max_size));
+                println!("Successfully copied {} to clipboard", ByteFormatter::format(size));
+            } else {
+                println!("Successfully copied {} to clipboard", ByteFormatter::format(size));
+            }
             eprintln!("\n{}", result.stats.format_stats());
         }
         Err(error) => {
