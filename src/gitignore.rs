@@ -29,12 +29,12 @@ impl GitignoreManager {
 
         // Check for .gitignore in the root directory
         let gitignore_path = root_path.join(".gitignore");
-        if gitignore_path.exists() {
-            if let Ok(content) = fs::read_to_string(&gitignore_path) {
-                let matcher = GitignoreMatcher::new(&content, root_path);
-                inner.matchers.insert(root_path.to_path_buf(), matcher);
-                inner.active_gitignores.push(gitignore_path);
-            }
+        if gitignore_path.exists()
+            && let Ok(content) = fs::read_to_string(&gitignore_path)
+        {
+            let matcher = GitignoreMatcher::new(&content, root_path);
+            inner.matchers.insert(root_path.to_path_buf(), matcher);
+            inner.active_gitignores.push(gitignore_path);
         }
 
         Self {
@@ -49,12 +49,12 @@ impl GitignoreManager {
             let mut inner = self.inner.lock().unwrap();
 
             // Only load if we haven't already
-            if !inner.matchers.contains_key(dir_path) {
-                if let Ok(content) = fs::read_to_string(&gitignore_path) {
-                    let matcher = GitignoreMatcher::new(&content, dir_path);
-                    inner.matchers.insert(dir_path.to_path_buf(), matcher);
-                    inner.active_gitignores.push(gitignore_path);
-                }
+            if !inner.matchers.contains_key(dir_path)
+                && let Ok(content) = fs::read_to_string(&gitignore_path)
+            {
+                let matcher = GitignoreMatcher::new(&content, dir_path);
+                inner.matchers.insert(dir_path.to_path_buf(), matcher);
+                inner.active_gitignores.push(gitignore_path);
             }
         }
     }
@@ -68,10 +68,10 @@ impl GitignoreManager {
         let mut current_path = inner.root_path.clone();
 
         // First check the root
-        if let Some(matcher) = inner.matchers.get(&current_path) {
-            if matcher.should_ignore(path) {
-                return true;
-            }
+        if let Some(matcher) = inner.matchers.get(&current_path)
+            && matcher.should_ignore(path)
+        {
+            return true;
         }
 
         // Then check each subdirectory leading to the target
@@ -80,10 +80,10 @@ impl GitignoreManager {
                 current_path.push(component);
 
                 // Only check directories that have gitignore files
-                if let Some(matcher) = inner.matchers.get(&current_path) {
-                    if matcher.should_ignore(path) {
-                        return true;
-                    }
+                if let Some(matcher) = inner.matchers.get(&current_path)
+                    && matcher.should_ignore(path)
+                {
+                    return true;
                 }
             }
         }
@@ -217,8 +217,8 @@ impl GitignoreMatcher {
                 self.match_parts(&path_parts, &pattern_parts, 0)
             } else {
                 // Match against any component
-                for i in 0..path_parts.len() {
-                    if self.glob_match(path_parts[i], pattern) {
+                for part in &path_parts {
+                    if self.glob_match(part, pattern) {
                         return true;
                     }
                 }

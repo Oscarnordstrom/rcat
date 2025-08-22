@@ -26,6 +26,12 @@ struct Stats {
     total_bytes: usize,
 }
 
+impl Default for StatsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StatsCollector {
     /// Create a new statistics collector
     pub fn new() -> Self {

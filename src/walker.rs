@@ -154,29 +154,25 @@ impl DirectoryWalker {
 
         if path.is_file() {
             // Skip hidden files (starting with '.') unless --all is specified
-            if !self.options.include_all {
-                if let Some(file_name) = path.file_name() {
-                    if let Some(name_str) = file_name.to_str() {
-                        if name_str.starts_with('.') {
-                            self.stats.record_skipped_file();
-                            return Ok(Vec::new());
-                        }
-                    }
-                }
+            if !self.options.include_all
+                && let Some(file_name) = path.file_name()
+                && let Some(name_str) = file_name.to_str()
+                && name_str.starts_with('.')
+            {
+                self.stats.record_skipped_file();
+                return Ok(Vec::new());
             }
             self.process_file(path)?;
             Ok(Vec::new())
         } else if path.is_dir() {
             // Skip hidden directories (starting with '.') unless --all is specified
-            if !self.options.include_all {
-                if let Some(dir_name) = path.file_name() {
-                    if let Some(name_str) = dir_name.to_str() {
-                        if name_str.starts_with('.') {
-                            self.stats.record_skipped_directory();
-                            return Ok(Vec::new());
-                        }
-                    }
-                }
+            if !self.options.include_all
+                && let Some(dir_name) = path.file_name()
+                && let Some(name_str) = dir_name.to_str()
+                && name_str.starts_with('.')
+            {
+                self.stats.record_skipped_directory();
+                return Ok(Vec::new());
             }
             self.process_directory_bfs(path)
         } else {
@@ -258,17 +254,16 @@ impl DirectoryWalker {
             }
 
             // Check for hidden files/directories
-            if let Some(name) = path.file_name() {
-                if let Some(name_str) = name.to_str() {
-                    if name_str.starts_with('.') {
-                        if path.is_file() {
-                            self.stats.record_skipped_file();
-                        } else if path.is_dir() {
-                            self.stats.record_skipped_directory();
-                        }
-                        return false;
-                    }
+            if let Some(name) = path.file_name()
+                && let Some(name_str) = name.to_str()
+                && name_str.starts_with('.')
+            {
+                if path.is_file() {
+                    self.stats.record_skipped_file();
+                } else if path.is_dir() {
+                    self.stats.record_skipped_directory();
                 }
+                return false;
             }
         }
 
@@ -306,24 +301,24 @@ impl DirectoryWalker {
             FileContent::Binary => {
                 self.stats.record_binary_file(path);
                 // Skip binary files unless --all is specified
-                if self.options.include_all {
-                    if let Some(formatted) = FileProcessor::format_content(path, content) {
-                        let size = formatted.len();
+                if self.options.include_all
+                    && let Some(formatted) = FileProcessor::format_content(path, content)
+                {
+                    let size = formatted.len();
 
-                        if self.total_size + size > self.options.max_size {
-                            self.contents.push(format!(
-                                "\n--- TRUNCATED: Size limit of {} reached ---\n--- {} collected, {} would exceed limit ---",
-                                ByteFormatter::format_as_unit(self.options.max_size),
-                                ByteFormatter::format(self.total_size),
-                                ByteFormatter::format(self.total_size + size)
-                            ));
-                            self.truncated = true;
-                            return Ok(());
-                        }
-
-                        self.total_size += size;
-                        self.contents.push(formatted);
+                    if self.total_size + size > self.options.max_size {
+                        self.contents.push(format!(
+                            "\n--- TRUNCATED: Size limit of {} reached ---\n--- {} collected, {} would exceed limit ---",
+                            ByteFormatter::format_as_unit(self.options.max_size),
+                            ByteFormatter::format(self.total_size),
+                            ByteFormatter::format(self.total_size + size)
+                        ));
+                        self.truncated = true;
+                        return Ok(());
                     }
+
+                    self.total_size += size;
+                    self.contents.push(formatted);
                 }
             }
             FileContent::Unreadable => {
@@ -362,7 +357,7 @@ mod tests {
         let file_path = dir.join("test.txt");
         fs::write(&file_path, "test content").unwrap();
 
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
 
         assert!(result.content.contains("test content"));
         assert!(result.content.contains("test.txt"));
@@ -379,12 +374,12 @@ mod tests {
         file.write_all(&[0u8; 100]).unwrap();
 
         // Binary files should be skipped by default
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
         assert!(!result.content.contains("<BINARY_FILE>"));
 
         // But included with include_all option
         let result = walk_and_collect(
-            &[dir.clone()],
+            std::slice::from_ref(&dir),
             WalkOptions {
                 include_all: true,
                 max_size: Config::DEFAULT_MAX_SIZE,
@@ -406,7 +401,7 @@ mod tests {
         fs::write(dir.join("subdir1/level1.txt"), "level 1").unwrap();
         fs::write(dir.join("subdir1/subdir2/level2.txt"), "level 2").unwrap();
 
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
 
         assert!(result.content.contains("root file"));
         assert!(result.content.contains("level 1"));
@@ -419,7 +414,7 @@ mod tests {
     fn test_walk_and_collect_empty_directory() {
         let dir = setup_test_dir("empty");
 
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
 
         assert_eq!(result.content, "");
 
@@ -437,7 +432,7 @@ mod tests {
             fs::write(dir.join(format!("file_{:02}.txt", i)), content).unwrap();
         }
 
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
 
         // Result should be under DEFAULT_MAX_SIZE plus overhead for truncation message
         assert!(result.content.len() <= Config::DEFAULT_MAX_SIZE + 1000);
@@ -462,7 +457,7 @@ mod tests {
         fs::write(dir.join(".git/config"), "git config").unwrap();
 
         // Default: skip hidden files and directories
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
         assert!(!result.content.contains("secret=value"));
         assert!(!result.content.contains("hidden content"));
         assert!(!result.content.contains("git config"));
@@ -470,7 +465,7 @@ mod tests {
 
         // With include_all: include hidden files and directories
         let result = walk_and_collect(
-            &[dir.clone()],
+            std::slice::from_ref(&dir),
             WalkOptions {
                 include_all: true,
                 max_size: Config::DEFAULT_MAX_SIZE,
@@ -506,7 +501,7 @@ mod tests {
         fs::create_dir(dir.join("dir1/subdir")).unwrap();
         fs::write(dir.join("dir1/subdir/deep.txt"), "deep_file").unwrap();
 
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
 
         // Find positions of each file in the output
         let pos_root_a = result.content.find("root_a").unwrap();
@@ -585,7 +580,7 @@ mod tests {
         unix_fs::symlink(dir.join("original.txt"), dir.join("link_to_file.txt")).unwrap();
         unix_fs::symlink(dir.join("original_dir"), dir.join("link_to_dir")).unwrap();
 
-        let result = walk_and_collect(&[dir.clone()], WalkOptions::default()).unwrap();
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
 
         // Each content should appear exactly once despite symlinks
         let original_count = result.content.matches("original_content").count();

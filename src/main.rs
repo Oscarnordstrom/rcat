@@ -52,7 +52,7 @@ impl Args {
                     let size_str = iter.next().ok_or_else(|| {
                         ArgsError::InvalidSize("--max-size requires a value".to_string())
                     })?;
-                    max_size = parse_size(size_str).map_err(|e| ArgsError::InvalidSize(e))?;
+                    max_size = parse_size(size_str).map_err(ArgsError::InvalidSize)?;
                 }
                 path_str if path_str.starts_with('-') => {
                     return Err(ArgsError::UnknownOption(path_str.to_string()));
