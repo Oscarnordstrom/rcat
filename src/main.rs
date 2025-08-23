@@ -14,7 +14,7 @@ struct AppInfo;
 impl AppInfo {
     const NAME: &'static str = "rcat";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const DESCRIPTION: &'static str = "Recursively concatenate files and copy to clipboard";
+    const DESCRIPTION: &'static str = "Recursively concatenate files and copy to clipboard or output to stdout";
 }
 
 /// Command-line arguments
@@ -24,6 +24,7 @@ struct Args {
     max_size: usize,
     max_file_size: usize,
     exclude_patterns: Vec<String>,
+    stdout: bool,
 }
 
 impl Args {
@@ -40,6 +41,7 @@ impl Args {
         let mut max_size = Config::DEFAULT_MAX_SIZE;
         let mut max_file_size = Config::DEFAULT_MAX_FILE_SIZE;
         let mut exclude_patterns = Vec::new();
+        let mut stdout = false;
         let mut skip_next = false;
 
         let mut iter = args.iter().skip(1).peekable();
@@ -52,6 +54,7 @@ impl Args {
             match arg.as_str() {
                 "--help" | "-h" => return Err(ArgsError::HelpRequested),
                 "--all" | "-a" => include_all = true,
+                "--stdout" | "-o" => stdout = true,
                 "--max-size" | "-m" => {
                     let size_str = iter.next().ok_or_else(|| {
                         ArgsError::InvalidSize("--max-size requires a value".to_string())
@@ -93,6 +96,7 @@ impl Args {
             max_size,
             max_file_size,
             exclude_patterns,
+            stdout,
         })
     }
 }
@@ -118,11 +122,12 @@ fn print_help(program_name: &str) {
     eprintln!("  --max-size, -m <size>       Set maximum output size (e.g., 10MB, 1GB, 500KB)");
     eprintln!("  --max-file-size, -f <size>  Skip files larger than this size (e.g., 500KB, 1MB)");
     eprintln!("  --exclude, -e <pattern>     Exclude files matching pattern (can be used multiple times)");
+    eprintln!("  --stdout, -o                Output content to stdout instead of clipboard");
     eprintln!("  --help, -h                  Show this help message");
     eprintln!();
     eprintln!("Description:");
     eprintln!("  Recursively walks through directories, concatenates all file contents,");
-    eprintln!("  and copies the result to the system clipboard.");
+    eprintln!("  and copies the result to the system clipboard (or outputs to stdout).");
     eprintln!();
     eprintln!("  You can specify multiple paths to process them all together.");
     eprintln!();
@@ -163,6 +168,10 @@ fn print_help(program_name: &str) {
         "  {} --exclude 'test_*' src/  # Exclude files starting with test_",
         program_name
     );
+    eprintln!(
+        "  {} --stdout src/ | less    # Output to stdout and pipe to less",
+        program_name
+    );
 }
 
 /// Print error message
@@ -194,12 +203,6 @@ fn main() {
         .next()
         .unwrap_or_else(|| AppInfo::NAME.to_string());
 
-    // Validate clipboard utility is available before processing
-    if let Err(error) = clipboard::validate_clipboard() {
-        eprintln!("Error: {}", error);
-        process::exit(1);
-    }
-
     let args = match Args::parse() {
         Ok(args) => args,
         Err(error) => match error {
@@ -213,6 +216,14 @@ fn main() {
             }
         },
     };
+
+    // Validate clipboard utility is available before processing (unless using stdout)
+    if !args.stdout {
+        if let Err(error) = clipboard::validate_clipboard() {
+            eprintln!("Error: {}", error);
+            process::exit(1);
+        }
+    }
 
     run(args);
 }
@@ -228,7 +239,7 @@ fn run(args: Args) {
 
     match walk_and_collect(&args.paths, options) {
         Ok(result) => {
-            handle_result(result, args.max_size);
+            handle_result(result, args.max_size, args.stdout);
         }
         Err(error) => {
             eprintln!("Error: Failed to process directories - {}", error);
@@ -238,36 +249,59 @@ fn run(args: Args) {
 }
 
 /// Handle the collected result
-fn handle_result(result: WalkResult, max_size: usize) {
+fn handle_result(result: WalkResult, max_size: usize, stdout: bool) {
     let size = result.content.len();
 
     if size == 0 {
-        println!("No files found to copy");
+        if stdout {
+            eprintln!("No files found to output");
+        } else {
+            eprintln!("No files found to copy");
+        }
         return;
     }
 
-    match clipboard::copy_to_clipboard(&result.content) {
-        Ok(_) => {
-            if result.truncated {
-                println!(
-                    "Content truncated at {} limit",
-                    ByteFormatter::format_as_unit(max_size)
-                );
-                println!(
-                    "Successfully copied {} to clipboard",
-                    ByteFormatter::format(size)
-                );
-            } else {
-                println!(
-                    "Successfully copied {} to clipboard",
-                    ByteFormatter::format(size)
-                );
-            }
-            eprintln!("\n{}", result.stats.format_stats());
+    if stdout {
+        // Output content to stdout
+        print!("{}", result.content);
+        
+        // Status messages to stderr
+        if result.truncated {
+            eprintln!(
+                "Content truncated at {} limit",
+                ByteFormatter::format_as_unit(max_size)
+            );
         }
-        Err(error) => {
-            eprintln!("Error: Failed to copy to clipboard - {}", error);
-            process::exit(1);
+        eprintln!(
+            "Successfully output {} to stdout",
+            ByteFormatter::format(size)
+        );
+        eprintln!("\n{}", result.stats.format_stats());
+    } else {
+        // Copy to clipboard (existing behavior)
+        match clipboard::copy_to_clipboard(&result.content) {
+            Ok(_) => {
+                if result.truncated {
+                    eprintln!(
+                        "Content truncated at {} limit",
+                        ByteFormatter::format_as_unit(max_size)
+                    );
+                    eprintln!(
+                        "Successfully copied {} to clipboard",
+                        ByteFormatter::format(size)
+                    );
+                } else {
+                    eprintln!(
+                        "Successfully copied {} to clipboard",
+                        ByteFormatter::format(size)
+                    );
+                }
+                eprintln!("\n{}", result.stats.format_stats());
+            }
+            Err(error) => {
+                eprintln!("Error: Failed to copy to clipboard - {}", error);
+                process::exit(1);
+            }
         }
     }
 }

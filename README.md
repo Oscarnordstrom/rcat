@@ -1,6 +1,6 @@
 # rcat
 
-Recursively concatenates files from directories and copies to clipboard.
+Recursively concatenates files from directories and copies to clipboard or outputs to stdout.
 
 ## Motivation
 
@@ -8,15 +8,15 @@ When working with multiple files across different directories, I found myself ne
 
 ## What it does
 
-Walks directory trees, reads all text files, concatenates them with file headers, and copies the result to your clipboard. Binary files are detected and marked. Hidden files/directories and gitignored paths are skipped by default.
+Walks directory trees, reads all text files, concatenates them with file headers, and copies the result to your clipboard (or outputs to stdout). Binary files are detected and marked. Hidden files/directories and gitignored paths are skipped by default.
 
 ## Features
 
 ### **Recursive Directory Traversal**
 Walks through directories in breadth-first order, processing all files systematically.
 
-### **Automatic Clipboard Copy**
-Results go straight to your clipboard.
+### **Flexible Output**
+Results go to your clipboard by default, or output to stdout for piping and redirection.
 
 ### **Smart File Filtering**
 - **Gitignore Support**: Respects .gitignore files hierarchically
@@ -57,6 +57,18 @@ rcat -e '*.log' -e '*.tmp' src/
 
 # Multiple exclusions
 rcat --exclude '*.rs' --exclude 'test_*' --exclude '*.json' src/
+
+# Output to stdout instead of clipboard
+rcat --stdout src/
+rcat -o src/
+
+# Pipe to other commands
+rcat -o src/ | less
+rcat -o src/ | grep "TODO"
+rcat -o src/ | wc -l
+
+# Redirect to file
+rcat -o src/ > combined.txt
 ```
 
 ## Options
@@ -65,6 +77,7 @@ rcat --exclude '*.rs' --exclude 'test_*' --exclude '*.json' src/
 - `--max-size, -m <size>` - Set maximum output size (e.g., 10MB, 1GB, 500KB)
 - `--max-file-size, -f <size>` - Skip files larger than this size (e.g., 500KB, 1MB)
 - `--exclude, -e <pattern>` - Exclude files matching pattern (can be used multiple times)
+- `--stdout, -o` - Output content to stdout instead of clipboard
 - `--help, -h` - Show help message
 
 **Size formats**: Use human-readable sizes like `500KB`, `10MB`, `1GB`
