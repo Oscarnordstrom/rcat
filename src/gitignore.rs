@@ -1,15 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 /// Manages gitignore patterns hierarchically
-#[derive(Clone)]
 pub struct GitignoreManager {
-    inner: Arc<Mutex<GitignoreManagerInner>>,
-}
-
-struct GitignoreManagerInner {
     // Map from directory path to its gitignore matcher
     matchers: HashMap<PathBuf, GitignoreMatcher>,
     // Track which gitignore files we've found
@@ -21,7 +15,7 @@ struct GitignoreManagerInner {
 impl GitignoreManager {
     /// Create a new gitignore manager starting from the given root path
     pub fn new(root_path: &Path) -> Self {
-        let mut inner = GitignoreManagerInner {
+        let mut manager = Self {
             matchers: HashMap::new(),
             active_gitignores: Vec::new(),
             root_path: root_path.to_path_buf(),
@@ -33,54 +27,48 @@ impl GitignoreManager {
             && let Ok(content) = fs::read_to_string(&gitignore_path)
         {
             let matcher = GitignoreMatcher::new(&content, root_path);
-            inner.matchers.insert(root_path.to_path_buf(), matcher);
-            inner.active_gitignores.push(gitignore_path);
+            manager.matchers.insert(root_path.to_path_buf(), matcher);
+            manager.active_gitignores.push(gitignore_path);
         }
 
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
-        }
+        manager
     }
 
     /// Check and load gitignore for a directory if it exists
-    pub fn check_directory(&self, dir_path: &Path) {
+    pub fn check_directory(&mut self, dir_path: &Path) {
         let gitignore_path = dir_path.join(".gitignore");
         if gitignore_path.exists() {
-            let mut inner = self.inner.lock().unwrap();
-
             // Only load if we haven't already
-            if !inner.matchers.contains_key(dir_path)
+            if !self.matchers.contains_key(dir_path)
                 && let Ok(content) = fs::read_to_string(&gitignore_path)
             {
                 let matcher = GitignoreMatcher::new(&content, dir_path);
-                inner.matchers.insert(dir_path.to_path_buf(), matcher);
-                inner.active_gitignores.push(gitignore_path);
+                self.matchers.insert(dir_path.to_path_buf(), matcher);
+                self.active_gitignores.push(gitignore_path);
             }
         }
     }
 
     /// Check if a path should be ignored based on all applicable gitignore files
     pub fn should_ignore(&self, path: &Path) -> bool {
-        let inner = self.inner.lock().unwrap();
-
         // Check each gitignore from root down to the file's directory
         // We need to check all parent directories
-        let mut current_path = inner.root_path.clone();
+        let mut current_path = self.root_path.clone();
 
         // First check the root
-        if let Some(matcher) = inner.matchers.get(&current_path)
+        if let Some(matcher) = self.matchers.get(&current_path)
             && matcher.should_ignore(path)
         {
             return true;
         }
 
         // Then check each subdirectory leading to the target
-        if let Ok(relative) = path.strip_prefix(&inner.root_path) {
+        if let Ok(relative) = path.strip_prefix(&self.root_path) {
             for component in relative.components() {
                 current_path.push(component);
 
                 // Only check directories that have gitignore files
-                if let Some(matcher) = inner.matchers.get(&current_path)
+                if let Some(matcher) = self.matchers.get(&current_path)
                     && matcher.should_ignore(path)
                 {
                     return true;
@@ -93,12 +81,12 @@ impl GitignoreManager {
 
     /// Get the list of active gitignore files
     pub fn active_gitignores(&self) -> Vec<PathBuf> {
-        self.inner.lock().unwrap().active_gitignores.clone()
+        self.active_gitignores.clone()
     }
 
     /// Check if any gitignore files are active
     pub fn has_active_gitignores(&self) -> bool {
-        !self.inner.lock().unwrap().active_gitignores.is_empty()
+        !self.active_gitignores.is_empty()
     }
 }
 

@@ -192,7 +192,7 @@ impl DirectoryWalker {
         self.stats.record_directory();
 
         // Check for .gitignore in this directory for all managers
-        for gitignore in &self.gitignore_managers {
+        for gitignore in &mut self.gitignore_managers {
             gitignore.check_directory(path);
 
             // Update stats if we found a new gitignore
@@ -211,7 +211,7 @@ impl DirectoryWalker {
         // Sort for deterministic ordering
         all_entries.sort();
 
-        // Separate files and directories
+        // Separate files and directories  
         let mut files = Vec::new();
         let mut subdirs = Vec::new();
 
@@ -241,7 +241,7 @@ impl DirectoryWalker {
     }
 
     /// Check if a path should be processed
-    fn should_process(&self, path: &Path) -> bool {
+    fn should_process(&mut self, path: &Path) -> bool {
         // Check gitignore
         if !self.options.include_all {
             for gitignore in &self.gitignore_managers {
