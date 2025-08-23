@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::file_processor::FileProcessor;
 use crate::format::ByteFormatter;
 use crate::gitignore::GitignoreManager;
+use crate::glob::GlobMatcher;
 use crate::stats::StatsCollector;
 
 /// Simple pattern matcher for exclude patterns using glob-style matching
@@ -33,74 +34,13 @@ impl ExcludeMatcher {
 
         for pattern in &self.patterns {
             // Match against full path or just filename
-            if self.glob_match(&path_str, pattern) || self.glob_match(&file_name, pattern) {
+            if GlobMatcher::matches(&path_str, pattern) || GlobMatcher::matches(&file_name, pattern) {
                 return true;
             }
         }
         false
     }
 
-    /// Simple glob matching for patterns (similar to gitignore logic)
-    fn glob_match(&self, text: &str, pattern: &str) -> bool {
-        if pattern == "*" {
-            return true;
-        }
-
-        if !pattern.contains('*') && !pattern.contains('?') {
-            return text == pattern;
-        }
-
-        // Simple glob matching implementation
-        let mut text_idx = 0;
-        let mut pattern_idx = 0;
-        let text_bytes = text.as_bytes();
-        let pattern_bytes = pattern.as_bytes();
-
-        let mut star_idx = None;
-        let mut star_match = None;
-
-        while text_idx < text_bytes.len() {
-            if pattern_idx < pattern_bytes.len() {
-                match pattern_bytes[pattern_idx] {
-                    b'*' => {
-                        star_idx = Some(pattern_idx);
-                        star_match = Some(text_idx);
-                        pattern_idx += 1;
-                    }
-                    b'?' => {
-                        text_idx += 1;
-                        pattern_idx += 1;
-                    }
-                    c if c == text_bytes[text_idx] => {
-                        text_idx += 1;
-                        pattern_idx += 1;
-                    }
-                    _ => {
-                        if let (Some(s_idx), Some(s_match)) = (star_idx, star_match) {
-                            pattern_idx = s_idx + 1;
-                            star_match = Some(s_match + 1);
-                            text_idx = s_match + 1;
-                        } else {
-                            return false;
-                        }
-                    }
-                }
-            } else if let (Some(s_idx), Some(s_match)) = (star_idx, star_match) {
-                pattern_idx = s_idx + 1;
-                star_match = Some(s_match + 1);
-                text_idx = s_match + 1;
-            } else {
-                return false;
-            }
-        }
-
-        // Check remaining pattern
-        while pattern_idx < pattern_bytes.len() && pattern_bytes[pattern_idx] == b'*' {
-            pattern_idx += 1;
-        }
-
-        pattern_idx == pattern_bytes.len()
-    }
 }
 
 /// Options for walking the directory tree

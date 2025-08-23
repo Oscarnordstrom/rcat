@@ -3,6 +3,7 @@ pub mod config;
 pub mod file_processor;
 pub mod format;
 pub mod gitignore;
+pub mod glob;
 pub mod stats;
 pub mod walker;
 

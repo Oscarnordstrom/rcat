@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::glob::GlobMatcher;
+
 /// Manages gitignore patterns hierarchically
 pub struct GitignoreManager {
     // Map from directory path to its gitignore matcher
@@ -206,7 +208,7 @@ impl GitignoreMatcher {
             } else {
                 // Match against any component
                 for part in &path_parts {
-                    if self.glob_match(part, pattern) {
+                    if GlobMatcher::matches(part, pattern) {
                         return true;
                     }
                 }
@@ -240,7 +242,7 @@ impl GitignoreMatcher {
 
                 // Try to find where the next pattern matches
                 while path_idx < path_parts.len() {
-                    if self.glob_match(path_parts[path_idx], next_pattern) {
+                    if GlobMatcher::matches(path_parts[path_idx], next_pattern) {
                         // Found a match, continue matching from here
                         if self.match_parts(path_parts, &pattern_parts[pattern_idx..], path_idx) {
                             return true;
@@ -249,7 +251,7 @@ impl GitignoreMatcher {
                     path_idx += 1;
                 }
                 return false;
-            } else if self.glob_match(path_part, pattern_part) {
+            } else if GlobMatcher::matches(path_part, pattern_part) {
                 path_idx += 1;
                 pattern_idx += 1;
             } else {
@@ -260,67 +262,6 @@ impl GitignoreMatcher {
         pattern_idx == pattern_parts.len()
     }
 
-    /// Simple glob matching for individual path components
-    fn glob_match(&self, text: &str, pattern: &str) -> bool {
-        if pattern == "*" {
-            return true;
-        }
-
-        if !pattern.contains('*') && !pattern.contains('?') {
-            return text == pattern;
-        }
-
-        // Simple glob matching implementation
-        let mut text_idx = 0;
-        let mut pattern_idx = 0;
-        let text_bytes = text.as_bytes();
-        let pattern_bytes = pattern.as_bytes();
-
-        let mut star_idx = None;
-        let mut star_match = None;
-
-        while text_idx < text_bytes.len() {
-            if pattern_idx < pattern_bytes.len() {
-                match pattern_bytes[pattern_idx] {
-                    b'*' => {
-                        star_idx = Some(pattern_idx);
-                        star_match = Some(text_idx);
-                        pattern_idx += 1;
-                    }
-                    b'?' => {
-                        text_idx += 1;
-                        pattern_idx += 1;
-                    }
-                    c if c == text_bytes[text_idx] => {
-                        text_idx += 1;
-                        pattern_idx += 1;
-                    }
-                    _ => {
-                        if let (Some(s_idx), Some(s_match)) = (star_idx, star_match) {
-                            pattern_idx = s_idx + 1;
-                            star_match = Some(s_match + 1);
-                            text_idx = s_match + 1;
-                        } else {
-                            return false;
-                        }
-                    }
-                }
-            } else if let (Some(s_idx), Some(s_match)) = (star_idx, star_match) {
-                pattern_idx = s_idx + 1;
-                star_match = Some(s_match + 1);
-                text_idx = s_match + 1;
-            } else {
-                return false;
-            }
-        }
-
-        // Check remaining pattern
-        while pattern_idx < pattern_bytes.len() && pattern_bytes[pattern_idx] == b'*' {
-            pattern_idx += 1;
-        }
-
-        pattern_idx == pattern_bytes.len()
-    }
 }
 
 #[cfg(test)]
@@ -329,16 +270,15 @@ mod tests {
 
     #[test]
     fn test_glob_match() {
-        let content = "";
-        let matcher = GitignoreMatcher::new(content, Path::new("."));
+        use crate::glob::GlobMatcher;
 
-        assert!(matcher.glob_match("test.txt", "*.txt"));
-        assert!(matcher.glob_match("test.txt", "test.*"));
-        assert!(matcher.glob_match("test.txt", "*.*"));
-        assert!(matcher.glob_match("test.txt", "test.txt"));
-        assert!(!matcher.glob_match("test.txt", "*.rs"));
-        assert!(matcher.glob_match("a", "?"));
-        assert!(!matcher.glob_match("ab", "?"));
+        assert!(GlobMatcher::matches("test.txt", "*.txt"));
+        assert!(GlobMatcher::matches("test.txt", "test.*"));
+        assert!(GlobMatcher::matches("test.txt", "*.*"));
+        assert!(GlobMatcher::matches("test.txt", "test.txt"));
+        assert!(!GlobMatcher::matches("test.txt", "*.rs"));
+        assert!(GlobMatcher::matches("a", "?"));
+        assert!(!GlobMatcher::matches("ab", "?"));
     }
 
     #[test]
