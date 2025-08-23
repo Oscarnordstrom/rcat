@@ -108,58 +108,58 @@ enum ArgsError {
 
 /// Print help message
 fn print_help(program_name: &str) {
-    println!("{} v{}", AppInfo::NAME, AppInfo::VERSION);
-    println!("{}", AppInfo::DESCRIPTION);
-    println!();
-    println!("Usage: {} [OPTIONS] <path>...", program_name);
-    println!();
-    println!("Options:");
-    println!("  --all, -a                   Include hidden directories and binary files");
-    println!("  --max-size, -m <size>       Set maximum output size (e.g., 10MB, 1GB, 500KB)");
-    println!("  --max-file-size, -f <size>  Skip files larger than this size (e.g., 500KB, 1MB)");
-    println!("  --exclude, -e <pattern>     Exclude files matching pattern (can be used multiple times)");
-    println!("  --help, -h                  Show this help message");
-    println!();
-    println!("Description:");
-    println!("  Recursively walks through directories, concatenates all file contents,");
-    println!("  and copies the result to the system clipboard.");
-    println!();
-    println!("  You can specify multiple paths to process them all together.");
-    println!();
-    println!("  By default, hidden directories (starting with '.') and binary files");
-    println!("  are skipped. Use --all to include them.");
-    println!();
-    println!(
+    eprintln!("{} v{}", AppInfo::NAME, AppInfo::VERSION);
+    eprintln!("{}", AppInfo::DESCRIPTION);
+    eprintln!();
+    eprintln!("Usage: {} [OPTIONS] <path>...", program_name);
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --all, -a                   Include hidden directories and binary files");
+    eprintln!("  --max-size, -m <size>       Set maximum output size (e.g., 10MB, 1GB, 500KB)");
+    eprintln!("  --max-file-size, -f <size>  Skip files larger than this size (e.g., 500KB, 1MB)");
+    eprintln!("  --exclude, -e <pattern>     Exclude files matching pattern (can be used multiple times)");
+    eprintln!("  --help, -h                  Show this help message");
+    eprintln!();
+    eprintln!("Description:");
+    eprintln!("  Recursively walks through directories, concatenates all file contents,");
+    eprintln!("  and copies the result to the system clipboard.");
+    eprintln!();
+    eprintln!("  You can specify multiple paths to process them all together.");
+    eprintln!();
+    eprintln!("  By default, hidden directories (starting with '.') and binary files");
+    eprintln!("  are skipped. Use --all to include them.");
+    eprintln!();
+    eprintln!(
         "  The default size limit is {}. Use --max-size to change it.",
         ByteFormatter::format_as_unit(Config::DEFAULT_MAX_SIZE)
     );
-    println!(
+    eprintln!(
         "  Files larger than {} are skipped by default. Use --max-file-size to change it.",
         ByteFormatter::format_as_unit(Config::DEFAULT_MAX_FILE_SIZE)
     );
-    println!();
-    println!("Examples:");
-    println!(
+    eprintln!();
+    eprintln!("Examples:");
+    eprintln!(
         "  {} src/                  # Process src directory",
         program_name
     );
-    println!(
+    eprintln!(
         "  {} --all src/ tests/     # Include all files from both directories",
         program_name
     );
-    println!(
+    eprintln!(
         "  {} --max-size 10MB src/  # Limit output to 10MB",
         program_name
     );
-    println!(
+    eprintln!(
         "  {} --max-file-size 1MB src/  # Skip files larger than 1MB",
         program_name
     );
-    println!(
+    eprintln!(
         "  {} -e '*.log' -e '*.tmp' src/  # Exclude log and tmp files",
         program_name
     );
-    println!(
+    eprintln!(
         "  {} --exclude 'test_*' src/  # Exclude files starting with test_",
         program_name
     );
