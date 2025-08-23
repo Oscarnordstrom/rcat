@@ -2,20 +2,34 @@
 
 Recursively concatenates files from directories and copies to clipboard.
 
+## Motivation
+
+When working with multiple files across different directories, I found myself needing to quickly copy their contents together for analysis, sharing, or processing. Simple bash scripts kept including files I didn't want (logs, build artifacts, etc.) and were unreliable. I built this tool to provide a simple interface to quickly copy project content to my clipboard.
+
 ## What it does
 
 Walks directory trees, reads all text files, concatenates them with file headers, and copies the result to your clipboard. Binary files are detected and marked. Hidden files/directories and gitignored paths are skipped by default.
 
 ## Features
 
-- Recursive directory traversal (breadth-first)
-- Automatic clipboard copy
-- Binary file detection
-- Gitignore support (hierarchical)
-- Hidden file/directory filtering
-- Size limiting with configurable max
-- Multiple path support
-- Progress statistics
+### **Recursive Directory Traversal**
+Walks through directories in breadth-first order, processing all files systematically.
+
+### **Automatic Clipboard Copy**
+Results go straight to your clipboard.
+
+### **Smart File Filtering**
+- **Gitignore Support**: Respects .gitignore files hierarchically
+- **Hidden File Filtering**: Skips hidden files/directories by default
+- **Binary Detection**: Identifies and marks binary files
+- **Size Limits**: Skip files over a certain size (500KB default)
+- **Custom Exclusions**: Use patterns to exclude specific files
+
+### **Flexible Input**
+Process single directories, multiple paths, or current directory.
+
+### **Progress Statistics**
+Shows what was processed, skipped, and why.
 
 ## Usage
 
@@ -23,7 +37,7 @@ Walks directory trees, reads all text files, concatenates them with file headers
 # Single directory
 rcat src/
 
-# Multiple paths
+# Multiple paths  
 rcat src/ tests/ docs/
 
 # Current directory
@@ -34,13 +48,28 @@ rcat --all src/
 
 # Set custom size limit
 rcat --max-size 10MB src/
+
+# Skip files larger than 1MB
+rcat --max-file-size 1MB src/
+
+# Exclude specific patterns
+rcat -e '*.log' -e '*.tmp' src/
+
+# Multiple exclusions
+rcat --exclude '*.rs' --exclude 'test_*' --exclude '*.json' src/
 ```
 
 ## Options
 
 - `--all, -a` - Include hidden directories and binary files
 - `--max-size, -m <size>` - Set maximum output size (e.g., 10MB, 1GB, 500KB)
+- `--max-file-size, -f <size>` - Skip files larger than this size (e.g., 500KB, 1MB)
+- `--exclude, -e <pattern>` - Exclude files matching pattern (can be used multiple times)
 - `--help, -h` - Show help message
+
+**Size formats**: Use human-readable sizes like `500KB`, `10MB`, `1GB`
+
+**Exclude patterns**: Use glob patterns like `*.log`, `test_*`, `config.yaml`
 
 ## Installation
 
@@ -69,5 +98,12 @@ cp target/release/rcat ~/.local/bin/
 - Rust toolchain
 - Clipboard utility:
   - macOS: `pbcopy` (built-in)
-  - Linux: `xclip` (`sudo apt install xclip`)
+  - Linux: `xclip` (`sudo apt install xclip` or `sudo pacman -S xclip`)
   - Windows: `clip` (built-in)
+
+## Default Behavior
+
+- **Size limits**: 5MB total output, 500KB per file
+- **Skips**: Hidden files, binary files, gitignored paths
+- **Includes**: Text files in current directory and subdirectories
+- **Order**: Breadth-first traversal (files at same level before going deeper)
