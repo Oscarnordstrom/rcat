@@ -14,6 +14,7 @@ use crate::stats::StatsCollector;
 pub struct WalkOptions {
     pub include_all: bool,
     pub max_size: usize,
+    pub max_file_size: usize,
 }
 
 impl Default for WalkOptions {
@@ -21,6 +22,7 @@ impl Default for WalkOptions {
         Self {
             include_all: false,
             max_size: Config::DEFAULT_MAX_SIZE,
+            max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
         }
     }
 }
@@ -274,6 +276,15 @@ impl DirectoryWalker {
     fn process_file(&mut self, path: &Path) -> io::Result<()> {
         use crate::file_processor::FileContent;
 
+        // Check file size before processing
+        if let Ok(metadata) = path.metadata() {
+            let file_size = metadata.len() as usize;
+            if file_size > self.options.max_file_size {
+                self.stats.record_skipped_large_file();
+                return Ok(());
+            }
+        }
+
         let content = FileProcessor::process(path);
 
         match &content {
@@ -383,6 +394,7 @@ mod tests {
             WalkOptions {
                 include_all: true,
                 max_size: Config::DEFAULT_MAX_SIZE,
+                max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
             },
         )
         .unwrap();
@@ -469,6 +481,7 @@ mod tests {
             WalkOptions {
                 include_all: true,
                 max_size: Config::DEFAULT_MAX_SIZE,
+                max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
             },
         )
         .unwrap();
@@ -594,6 +607,38 @@ mod tests {
             nested_count, 1,
             "nested.txt content should appear exactly once"
         );
+
+        cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_skip_large_files() {
+        let dir = setup_test_dir("large_files");
+
+        // Create a small file that should be included
+        fs::write(dir.join("small.txt"), "small content").unwrap();
+
+        // Create a large file that should be skipped (over 500KB)
+        let large_content = "x".repeat(600_000); // 600KB
+        fs::write(dir.join("large.txt"), &large_content).unwrap();
+
+        // With default options (500KB limit)
+        let result = walk_and_collect(std::slice::from_ref(&dir), WalkOptions::default()).unwrap();
+        assert!(result.content.contains("small content"));
+        assert!(!result.content.contains(&large_content));
+
+        // With a higher file size limit
+        let result = walk_and_collect(
+            std::slice::from_ref(&dir),
+            WalkOptions {
+                include_all: false,
+                max_size: Config::DEFAULT_MAX_SIZE,
+                max_file_size: 1024 * 1024, // 1MB
+            },
+        )
+        .unwrap();
+        assert!(result.content.contains("small content"));
+        assert!(result.content.contains(&large_content[..100])); // Check first 100 chars
 
         cleanup_test_dir(&dir);
     }

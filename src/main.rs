@@ -22,6 +22,7 @@ struct Args {
     paths: Vec<PathBuf>,
     include_all: bool,
     max_size: usize,
+    max_file_size: usize,
 }
 
 impl Args {
@@ -36,6 +37,7 @@ impl Args {
         let mut include_all = false;
         let mut paths = Vec::new();
         let mut max_size = Config::DEFAULT_MAX_SIZE;
+        let mut max_file_size = Config::DEFAULT_MAX_FILE_SIZE;
         let mut skip_next = false;
 
         let mut iter = args.iter().skip(1).peekable();
@@ -53,6 +55,12 @@ impl Args {
                         ArgsError::InvalidSize("--max-size requires a value".to_string())
                     })?;
                     max_size = parse_size(size_str).map_err(ArgsError::InvalidSize)?;
+                }
+                "--max-file-size" | "-f" => {
+                    let size_str = iter.next().ok_or_else(|| {
+                        ArgsError::InvalidSize("--max-file-size requires a value".to_string())
+                    })?;
+                    max_file_size = parse_size(size_str).map_err(ArgsError::InvalidSize)?;
                 }
                 path_str if path_str.starts_with('-') => {
                     return Err(ArgsError::UnknownOption(path_str.to_string()));
@@ -75,6 +83,7 @@ impl Args {
             paths,
             include_all,
             max_size,
+            max_file_size,
         })
     }
 }
@@ -96,9 +105,10 @@ fn print_help(program_name: &str) {
     println!("Usage: {} [OPTIONS] <path>...", program_name);
     println!();
     println!("Options:");
-    println!("  --all, -a              Include hidden directories and binary files");
-    println!("  --max-size, -m <size>  Set maximum output size (e.g., 10MB, 1GB, 500KB)");
-    println!("  --help, -h             Show this help message");
+    println!("  --all, -a                   Include hidden directories and binary files");
+    println!("  --max-size, -m <size>       Set maximum output size (e.g., 10MB, 1GB, 500KB)");
+    println!("  --max-file-size, -f <size>  Skip files larger than this size (e.g., 500KB, 1MB)");
+    println!("  --help, -h                  Show this help message");
     println!();
     println!("Description:");
     println!("  Recursively walks through directories, concatenates all file contents,");
@@ -113,6 +123,10 @@ fn print_help(program_name: &str) {
         "  The default size limit is {}. Use --max-size to change it.",
         ByteFormatter::format_as_unit(Config::DEFAULT_MAX_SIZE)
     );
+    println!(
+        "  Files larger than {} are skipped by default. Use --max-file-size to change it.",
+        ByteFormatter::format_as_unit(Config::DEFAULT_MAX_FILE_SIZE)
+    );
     println!();
     println!("Examples:");
     println!(
@@ -125,6 +139,10 @@ fn print_help(program_name: &str) {
     );
     println!(
         "  {} --max-size 10MB src/  # Limit output to 10MB",
+        program_name
+    );
+    println!(
+        "  {} --max-file-size 1MB src/  # Skip files larger than 1MB",
         program_name
     );
 }
@@ -186,6 +204,7 @@ fn run(args: Args) {
     let options = WalkOptions {
         include_all: args.include_all,
         max_size: args.max_size,
+        max_file_size: args.max_file_size,
     };
 
     match walk_and_collect(&args.paths, options) {

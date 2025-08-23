@@ -19,6 +19,7 @@ struct Stats {
     unreadable_files: usize,
     skipped_files: usize,
     skipped_directories: usize,
+    skipped_large_files: usize,
     gitignored_files: usize,
     gitignored_directories: usize,
     gitignore_files: Vec<PathBuf>,
@@ -44,6 +45,7 @@ impl StatsCollector {
                 unreadable_files: 0,
                 skipped_files: 0,
                 skipped_directories: 0,
+                skipped_large_files: 0,
                 gitignored_files: 0,
                 gitignored_directories: 0,
                 gitignore_files: Vec::new(),
@@ -116,6 +118,12 @@ impl StatsCollector {
         stats.gitignored_directories += 1;
     }
 
+    /// Record a large file that was skipped
+    pub fn record_skipped_large_file(&self) {
+        let mut stats = self.inner.lock().unwrap();
+        stats.skipped_large_files += 1;
+    }
+
     /// Set gitignore files being used
     pub fn set_gitignore_active(&self, gitignore_files: Vec<PathBuf>) {
         let mut stats = self.inner.lock().unwrap();
@@ -161,7 +169,7 @@ impl StatsCollector {
         }
 
         // Skipped items
-        let total_skipped_files = stats.skipped_files + stats.binary_files + stats.gitignored_files;
+        let total_skipped_files = stats.skipped_files + stats.binary_files + stats.gitignored_files + stats.skipped_large_files;
         let total_skipped_dirs = stats.skipped_directories + stats.gitignored_directories;
 
         if total_skipped_files > 0 || total_skipped_dirs > 0 {
@@ -171,6 +179,12 @@ impl StatsCollector {
                 skip_reasons.push(format!(
                     "{} hidden/binary",
                     stats.skipped_files + stats.binary_files
+                ));
+            }
+            if stats.skipped_large_files > 0 {
+                skip_reasons.push(format!(
+                    "{} too large",
+                    stats.skipped_large_files
                 ));
             }
             if stats.gitignored_files + stats.gitignored_directories > 0 {

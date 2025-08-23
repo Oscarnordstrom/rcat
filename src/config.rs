@@ -5,6 +5,9 @@ impl Config {
     /// Default maximum size of content to copy to clipboard (5MB)
     pub const DEFAULT_MAX_SIZE: usize = 5 * 1024 * 1024;
 
+    /// Default maximum file size to process (500KB)
+    pub const DEFAULT_MAX_FILE_SIZE: usize = 500 * 1024;
+
     /// Buffer size for binary file detection
     pub const BINARY_CHECK_BUFFER_SIZE: usize = 8192;
 }
