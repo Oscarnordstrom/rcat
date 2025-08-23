@@ -9,12 +9,107 @@ use crate::format::ByteFormatter;
 use crate::gitignore::GitignoreManager;
 use crate::stats::StatsCollector;
 
+/// Simple pattern matcher for exclude patterns using glob-style matching
+struct ExcludeMatcher {
+    patterns: Vec<String>,
+}
+
+impl ExcludeMatcher {
+    /// Create a new exclude matcher with the given patterns
+    fn new(patterns: Vec<String>) -> Self {
+        Self { patterns }
+    }
+
+    /// Check if a path matches any of the exclude patterns
+    fn should_exclude(&self, path: &Path) -> bool {
+        if self.patterns.is_empty() {
+            return false;
+        }
+
+        let path_str = path.to_string_lossy();
+        let file_name = path.file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default();
+
+        for pattern in &self.patterns {
+            // Match against full path or just filename
+            if self.glob_match(&path_str, pattern) || self.glob_match(&file_name, pattern) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Simple glob matching for patterns (similar to gitignore logic)
+    fn glob_match(&self, text: &str, pattern: &str) -> bool {
+        if pattern == "*" {
+            return true;
+        }
+
+        if !pattern.contains('*') && !pattern.contains('?') {
+            return text == pattern;
+        }
+
+        // Simple glob matching implementation
+        let mut text_idx = 0;
+        let mut pattern_idx = 0;
+        let text_bytes = text.as_bytes();
+        let pattern_bytes = pattern.as_bytes();
+
+        let mut star_idx = None;
+        let mut star_match = None;
+
+        while text_idx < text_bytes.len() {
+            if pattern_idx < pattern_bytes.len() {
+                match pattern_bytes[pattern_idx] {
+                    b'*' => {
+                        star_idx = Some(pattern_idx);
+                        star_match = Some(text_idx);
+                        pattern_idx += 1;
+                    }
+                    b'?' => {
+                        text_idx += 1;
+                        pattern_idx += 1;
+                    }
+                    c if c == text_bytes[text_idx] => {
+                        text_idx += 1;
+                        pattern_idx += 1;
+                    }
+                    _ => {
+                        if let (Some(s_idx), Some(s_match)) = (star_idx, star_match) {
+                            pattern_idx = s_idx + 1;
+                            star_match = Some(s_match + 1);
+                            text_idx = s_match + 1;
+                        } else {
+                            return false;
+                        }
+                    }
+                }
+            } else if let (Some(s_idx), Some(s_match)) = (star_idx, star_match) {
+                pattern_idx = s_idx + 1;
+                star_match = Some(s_match + 1);
+                text_idx = s_match + 1;
+            } else {
+                return false;
+            }
+        }
+
+        // Check remaining pattern
+        while pattern_idx < pattern_bytes.len() && pattern_bytes[pattern_idx] == b'*' {
+            pattern_idx += 1;
+        }
+
+        pattern_idx == pattern_bytes.len()
+    }
+}
+
 /// Options for walking the directory tree
 #[derive(Clone)]
 pub struct WalkOptions {
     pub include_all: bool,
     pub max_size: usize,
     pub max_file_size: usize,
+    pub exclude_patterns: Vec<String>,
 }
 
 impl Default for WalkOptions {
@@ -23,6 +118,7 @@ impl Default for WalkOptions {
             include_all: false,
             max_size: Config::DEFAULT_MAX_SIZE,
             max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
+            exclude_patterns: Vec::new(),
         }
     }
 }
@@ -53,6 +149,7 @@ struct DirectoryWalker {
     stats: StatsCollector,
     options: WalkOptions,
     gitignore_managers: Vec<GitignoreManager>,
+    exclude_matcher: ExcludeMatcher,
     root_paths: Vec<PathBuf>,
     visited_paths: HashSet<PathBuf>,
 }
@@ -60,6 +157,7 @@ struct DirectoryWalker {
 impl DirectoryWalker {
     /// Create a new directory walker
     fn new(options: WalkOptions) -> Self {
+        let exclude_matcher = ExcludeMatcher::new(options.exclude_patterns.clone());
         Self {
             contents: Vec::new(),
             total_size: 0,
@@ -67,6 +165,7 @@ impl DirectoryWalker {
             stats: StatsCollector::new(),
             options,
             gitignore_managers: Vec::new(),
+            exclude_matcher,
             root_paths: Vec::new(),
             visited_paths: HashSet::new(),
         }
@@ -242,6 +341,16 @@ impl DirectoryWalker {
 
     /// Check if a path should be processed
     fn should_process(&mut self, path: &Path) -> bool {
+        // Check exclude patterns first
+        if self.exclude_matcher.should_exclude(path) {
+            if path.is_file() {
+                self.stats.record_skipped_file();
+            } else if path.is_dir() {
+                self.stats.record_skipped_directory();
+            }
+            return false;
+        }
+
         // Check gitignore
         if !self.options.include_all {
             for gitignore in &self.gitignore_managers {
@@ -395,6 +504,7 @@ mod tests {
                 include_all: true,
                 max_size: Config::DEFAULT_MAX_SIZE,
                 max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
+                exclude_patterns: Vec::new(),
             },
         )
         .unwrap();
@@ -482,6 +592,7 @@ mod tests {
                 include_all: true,
                 max_size: Config::DEFAULT_MAX_SIZE,
                 max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
+                exclude_patterns: Vec::new(),
             },
         )
         .unwrap();
@@ -641,5 +752,82 @@ mod tests {
         assert!(result.content.contains(&large_content[..100])); // Check first 100 chars
 
         cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_exclude_patterns() {
+        let dir = setup_test_dir("exclude");
+
+        // Create various files
+        fs::write(dir.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(dir.join("lib.py"), "print('hello')").unwrap();
+        fs::write(dir.join("data.txt"), "some data").unwrap();
+        fs::write(dir.join("test_file.tmp"), "temporary").unwrap();
+        fs::write(dir.join("config.yaml"), "config: value").unwrap();
+
+        // Test excluding .rs files
+        let result = walk_and_collect(
+            std::slice::from_ref(&dir),
+            WalkOptions {
+                include_all: false,
+                max_size: Config::DEFAULT_MAX_SIZE,
+                max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
+                exclude_patterns: vec!["*.rs".to_string()],
+            },
+        )
+        .unwrap();
+        
+        assert!(!result.content.contains("fn main() {}"));
+        assert!(result.content.contains("print('hello')"));
+        assert!(result.content.contains("some data"));
+
+        // Test excluding multiple patterns
+        let result = walk_and_collect(
+            std::slice::from_ref(&dir),
+            WalkOptions {
+                include_all: false,
+                max_size: Config::DEFAULT_MAX_SIZE,
+                max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
+                exclude_patterns: vec!["*.rs".to_string(), "*.py".to_string(), "test_*".to_string()],
+            },
+        )
+        .unwrap();
+        
+        assert!(!result.content.contains("fn main() {}"));
+        assert!(!result.content.contains("print('hello')"));
+        assert!(!result.content.contains("temporary"));
+        assert!(result.content.contains("some data"));
+        assert!(result.content.contains("config: value"));
+
+        // Test excluding by exact filename
+        let result = walk_and_collect(
+            std::slice::from_ref(&dir),
+            WalkOptions {
+                include_all: false,
+                max_size: Config::DEFAULT_MAX_SIZE,
+                max_file_size: Config::DEFAULT_MAX_FILE_SIZE,
+                exclude_patterns: vec!["config.yaml".to_string()],
+            },
+        )
+        .unwrap();
+        
+        assert!(result.content.contains("fn main() {}"));
+        assert!(!result.content.contains("config: value"));
+
+        cleanup_test_dir(&dir);
+    }
+
+    #[test]
+    fn test_exclude_matcher_glob_patterns() {
+        let matcher = ExcludeMatcher::new(vec!["*.rs".to_string(), "test_*".to_string()]);
+
+        assert!(matcher.should_exclude(Path::new("main.rs")));
+        assert!(matcher.should_exclude(Path::new("src/lib.rs")));
+        assert!(matcher.should_exclude(Path::new("test_file.txt")));
+        assert!(matcher.should_exclude(Path::new("test_123")));
+        
+        assert!(!matcher.should_exclude(Path::new("main.py")));
+        assert!(!matcher.should_exclude(Path::new("config.yaml")));
+        assert!(!matcher.should_exclude(Path::new("file_test.txt")));
     }
 }

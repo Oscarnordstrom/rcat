@@ -23,6 +23,7 @@ struct Args {
     include_all: bool,
     max_size: usize,
     max_file_size: usize,
+    exclude_patterns: Vec<String>,
 }
 
 impl Args {
@@ -38,6 +39,7 @@ impl Args {
         let mut paths = Vec::new();
         let mut max_size = Config::DEFAULT_MAX_SIZE;
         let mut max_file_size = Config::DEFAULT_MAX_FILE_SIZE;
+        let mut exclude_patterns = Vec::new();
         let mut skip_next = false;
 
         let mut iter = args.iter().skip(1).peekable();
@@ -62,6 +64,12 @@ impl Args {
                     })?;
                     max_file_size = parse_size(size_str).map_err(ArgsError::InvalidSize)?;
                 }
+                "--exclude" | "-e" => {
+                    let pattern = iter.next().ok_or_else(|| {
+                        ArgsError::InvalidSize("--exclude requires a pattern".to_string())
+                    })?;
+                    exclude_patterns.push(pattern.to_string());
+                }
                 path_str if path_str.starts_with('-') => {
                     return Err(ArgsError::UnknownOption(path_str.to_string()));
                 }
@@ -84,6 +92,7 @@ impl Args {
             include_all,
             max_size,
             max_file_size,
+            exclude_patterns,
         })
     }
 }
@@ -108,6 +117,7 @@ fn print_help(program_name: &str) {
     println!("  --all, -a                   Include hidden directories and binary files");
     println!("  --max-size, -m <size>       Set maximum output size (e.g., 10MB, 1GB, 500KB)");
     println!("  --max-file-size, -f <size>  Skip files larger than this size (e.g., 500KB, 1MB)");
+    println!("  --exclude, -e <pattern>     Exclude files matching pattern (can be used multiple times)");
     println!("  --help, -h                  Show this help message");
     println!();
     println!("Description:");
@@ -143,6 +153,14 @@ fn print_help(program_name: &str) {
     );
     println!(
         "  {} --max-file-size 1MB src/  # Skip files larger than 1MB",
+        program_name
+    );
+    println!(
+        "  {} -e '*.log' -e '*.tmp' src/  # Exclude log and tmp files",
+        program_name
+    );
+    println!(
+        "  {} --exclude 'test_*' src/  # Exclude files starting with test_",
         program_name
     );
 }
@@ -205,6 +223,7 @@ fn run(args: Args) {
         include_all: args.include_all,
         max_size: args.max_size,
         max_file_size: args.max_file_size,
+        exclude_patterns: args.exclude_patterns,
     };
 
     match walk_and_collect(&args.paths, options) {
