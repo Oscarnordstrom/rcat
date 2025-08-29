@@ -89,7 +89,7 @@ rcat -o src/ > combined.txt
 ### macOS/Linux
 
 ```bash
-git clone https://github.com/username/rcat.git
+git clone https://github.com/oscarnordstrom/rcat.git
 cd rcat
 ./install.sh
 ```
